@@ -85,7 +85,7 @@ Line	*lines=0;
 double	*ray_spread=0, ray_spread_mean=0;
 int		nhit=0;
 double	*history=0;
-int		hist_idx=0;
+int		hist_idx=0, history_enabled=1;
 
 int		nrays=25, nsurfaces=4;
 int		correctorOn=1;
@@ -152,11 +152,27 @@ void	normalize(double dx, double dy, Point *ret)
 	ret->x=dx*invhyp;
 	ret->y=dy*invhyp;
 }
+int		refract(double n_before, double n_after, double sin_in, double *cos_em, double *sin_em)
+{
+	double temp=n_before*sin_in;
+	int reflection=temp>n_after;
+	if(reflection)//total internal reflection
+	{
+		*sin_em=sin_in;
+		*cos_em=-sqrt(1-*sin_em**sin_em);
+	}
+	else
+	{
+		*sin_em=temp/n_after;
+		*cos_em=sqrt(1-*sin_em**sin_em);
+	}
+	return reflection;
+}
 int		refract_ray_surface(double x1, double y1, double x2, double y2, double aperture, double nL, double nR, double x, double R, Point *ret_line)
 {
 	int hit=0;
 	Point sol[2];
-	double sin_incidence, sin_emergence, cos_emergence;
+	double sin_in, sin_em, cos_em;
 	if(x2==x1)
 		return 0;
 	if(x2<x1)
@@ -173,13 +189,10 @@ int		refract_ray_surface(double x1, double y1, double x2, double y2, double aper
 		if(hit)
 		{
 			normalize(x2-x1, y2-y1, sol);
-			sin_incidence=sol->y;
-			sin_emergence=nL/nR*sin_incidence;
-			cos_emergence=sqrt(1-sin_emergence*sin_emergence);
-			if(cos_emergence<0)
-				return 0;
-			ret_line[1].x=ret_line[0].x+cos_emergence;
-			ret_line[1].y=ret_line[0].y+sin_emergence;
+			sin_in=sol->y;
+			hit+=refract(nL, nR, sin_in, &cos_em, &sin_em);
+			ret_line[1].x=ret_line[0].x+cos_em;
+			ret_line[1].y=ret_line[0].y+sin_em;
 		}
 	}
 	else//+/- spherical at x
@@ -198,21 +211,18 @@ int		refract_ray_surface(double x1, double y1, double x2, double y2, double aper
 				ret_line[0].x=sol[1].x;
 				ret_line[0].y=sol[1].y;
 			}
-			hit=fabs(ret_line[0].y)<aperture;
+			hit=fabs(ret_line[0].y)<aperture*0.5;
 			if(hit)
 			{
 				int inc_dir=sgn_star(x2-x1);
 				normalize(x2-x1, y2-y1, sol);
 				normalize(sgn_star(R)*(xcenter-ret_line[0].x), -sgn_star(R)*ret_line[0].y, sol+1);
-				sin_incidence=sol[0].y*sol[1].x-sol[0].x*sol[1].y;
-				sin_emergence=nL/nR*sin_incidence;
-				cos_emergence=sqrt(1-sin_emergence*sin_emergence);
-				if(cos_emergence<0)
-					return 0;
+				sin_in=sol[0].y*sol[1].x-sol[0].x*sol[1].y;
+				hit+=refract(nL, nR, sin_in, &cos_em, &sin_em);
 				double
-					c2=cos_emergence*sol[1].x-sin_emergence*sol[1].y,
-					s2=sin_emergence*sol[1].x+cos_emergence*sol[1].y;
-				if(inc_dir!=sgn_star(c2))
+					c2=cos_em*sol[1].x-sin_em*sol[1].y,
+					s2=sin_em*sol[1].x+cos_em*sol[1].y;
+				if(hit!=2&&inc_dir!=sgn_star(c2))
 					c2=-c2, s2=-s2;
 				ret_line[1].x=ret_line[0].x+c2;
 				ret_line[1].y=ret_line[0].y+s2;
@@ -320,7 +330,7 @@ double	eval(double aperture, int nrays, double n, double R1, double t1, double x
 double
 	n_float=1.512, ap=12,//pre-determined
 
-	//learned parameters (cm)
+	//DEPRECATED
 	t1=0.8, R1=51.2, xdist=16, R2a=30, t2=1, R2b=-70,//std dev = 0.445444mm
 //	t1=0.8, R1=51.2, xdist=16, R2a=30, t2=1, R2b=-70,
 //	xdist=5, R2a=50, t2=2, R2b=-50,
@@ -333,34 +343,37 @@ double spread=0;
 typedef struct GlassElemStruct
 {
 	int active;
-	double dist, Rl, th, Rr;//cm
+	union
+	{
+		struct{double dist, Rl, th, Rr;};//cm;
+		double vars[4];
+	};
 } GlassElem;
 GlassElem		elements[]=
 {
-	{1,  0, 51.2, 0.8, 1000},
-	{1, 16, 30,   1, -70},
-	{0, 16, 30,   1, -70},
-	{0, 16, 30,   1, -70},
+	//learned parameters (cm)
+	{1,		0,		51.2,	0.8,	1000},	//53cm gives 98cm
+	{1,		2,		16,		1,		-15},
+	{0,		2,		15.71,	1,		-15},
+	{0,		2,		30,		1,		-70},
 };
 int				ecount=SIZEOF(elements), current_elem=0;
 void			eval2(GlassElem *elements, int count, double n, double aperture, double xend)
 {
 	Point l1[2], l2[2];
-	//Point line1[2], line2[2];
-	//Point *l1=line1, *l2=line2;
-	//Point *ltemp;
 	int hit;
 	GlassElem *ge;
 
+	ecount=count;
 	ray_spread=(double*)realloc(ray_spread, nrays*sizeof(double));
 	lines=(Line*)realloc(lines, ((count*2+2)*nrays)*sizeof(Line));
-	ecount=count;
 //	lines_alloc((count*2+2)*nrays);
 	nlines=0;
 	nhit=0;
+	//for(int k=nrays-1;k>=0;--k)
 	for(int k=0;k<nrays;++k)
 	{
-		l1[0].x=-10, l1[0].y=aperture*(k+1)/nrays*0.5, l1[1].x=0, l1[1].y=l1[0].y;
+		l1[0].x=-10, l1[0].y=aperture*(k+1)/(nrays+1)*0.5, l1[1].x=0, l1[1].y=l1[0].y;
 	//	lines_insert(l1[0].x, l1[0].y, l1[1].x, l1[1].y);
 		double x=0;
 		for(int k2=0;k2<count;++k2)
@@ -376,7 +389,11 @@ void			eval2(GlassElem *elements, int count, double n, double aperture, double x
 					break;
 				}
 				lines_insert(l1[0].x, l1[0].y, l2[0].x, l2[0].y);
-			//	ltemp=l1, l1=l2, l2=ltemp;
+				if(hit==2)
+				{
+					lines_insert(l2[0].x, l2[0].y, l2[1].x, l2[1].y);
+					break;
+				}
 			}
 			x+=ge->th;
 			if(ge->active)
@@ -388,14 +405,23 @@ void			eval2(GlassElem *elements, int count, double n, double aperture, double x
 					break;
 				}
 				lines_insert(l2[0].x, l2[0].y, l1[0].x, l1[0].y);
-			//	ltemp=l1, l1=l2, l2=ltemp;
+				if(hit==2)
+				{
+					lines_insert(l1[0].x, l1[0].y, l1[1].x, l1[1].y);
+					break;
+				}
 			}
 		}
-		if(hit)
+		if(hit==1)
 		{
-			double y=extrapolate_x(l1[0].x, l1[0].y, l1[1].x, l1[1].y, xend);
-			lines_insert(l1[0].x, l1[0].y, xend, y);
 			ray_spread[nhit]=extrapolate_y(l1[0].x, l1[0].y, l1[1].x, l1[1].y, 0);
+			if(ray_spread[nhit]>xend||l1[0].y<=l1[1].y)//if ray focuses beyond xend, or doesn't focus
+			{
+				double y=extrapolate_x(l1[0].x, l1[0].y, l1[1].x, l1[1].y, xend);
+				lines_insert(l1[0].x, l1[0].y, xend, y);
+			}
+			else
+				lines_insert(l1[0].x, l1[0].y, ray_spread[nhit], 0);
 			++nhit;
 		}
 	}
@@ -406,59 +432,70 @@ void			eval2(GlassElem *elements, int count, double n, double aperture, double x
 		ray_spread[k]-=ray_spread_mean;
 	//free(ray_spread);
 	variance=sqrt(variance);
-	history[hist_idx]=variance;
-	++hist_idx, hist_idx%=w;
+	if(history_enabled)
+	{
+		history[hist_idx]=variance;
+		++hist_idx, hist_idx%=w;
+	}
 	spread=variance;
-}
-void			calc_grad(double *grad, int ndim, double step)
-{
-	memset(grad, 0, ndim*sizeof(double));
-	for(int ke=0;ke<ecount;++ke)
-	{
-		GlassElem *ge=elements+ke;
-		if(ge->active)
-		{
-			ge->dist+=step;
-			eval2(elements, ndim/4, n_float, ap, 300);
-			ge->dist-=step;
-			grad[4*ke]=spread-ray_spread_mean;
-
-			ge->Rl+=step;
-			eval2(elements, ndim/4, n_float, ap, 300);
-			ge->Rl-=step;
-			grad[4*ke+1]=spread-ray_spread_mean;
-
-			ge->th+=step;
-			eval2(elements, ndim/4, n_float, ap, 300);
-			ge->th-=step;
-			grad[4*ke+2]=spread-ray_spread_mean;
-
-			ge->Rr+=step;
-			eval2(elements, ndim/4, n_float, ap, 300);
-			ge->Rr-=step;
-			grad[4*ke+3]=spread-ray_spread_mean;
-		}
-	}
-	eval2(elements, ndim/4, n_float, ap, 300);
-	for(int kd=0;kd<ndim;++kd)
-		grad[kd]-=spread-ray_spread_mean;
-}
-void			update_params(double *grad, int ndim)
-{
-	for(int ke=0;ke<ecount;++ke)
-	{
-		GlassElem *ge=elements+ke;
-		if(ge->active)
-		{
-			ge->dist+=grad[4*ke];
-			ge->Rl+=grad[4*ke+1];
-			ge->th+=grad[4*ke+2];
-			ge->Rr+=grad[4*ke+3];
-		}
-	}
 }
 	#define	EVAL()	eval2(elements, ecount, n_float, ap, 300)
 //	#define	EVAL()	spread=eval(ap, nrays, n_float, R1, t1, xdist, R2a, t2, R2b, xCCD, xCut)
+double			calc_loss()
+{
+	double focal_length=100;
+	focal_length-=ray_spread_mean;
+	return spread+focal_length*focal_length;
+}
+void			change_diopter(double *r, double delta)
+{
+	if(*r)
+		*r=1/(1 / *r+delta);
+	else
+		*r=1/delta;
+}
+void			calc_grad(double *grad, double step, int *var_idx, int nvars)
+{
+	history_enabled=0;
+	memset(grad, 0, ecount*4*sizeof(double));
+	for(int ke=1;ke<ecount;++ke)//exclude first glass element
+	{
+		GlassElem *ge=elements+ke;
+		if(ge->active)
+		{
+			for(int kv=0;kv<nvars;++kv)
+			{
+				ge->vars[var_idx[kv]]+=step;
+				EVAL();
+				ge->vars[var_idx[kv]]-=step;
+				grad[nvars*ke+var_idx[kv]]=calc_loss();
+			}
+		}
+	}
+	EVAL();
+	double loss=calc_loss();
+	for(int ke=1;ke<ecount;++ke)
+	{
+		if(elements[ke].active)
+		{
+			for(int kv=0;kv<nvars;++kv)
+				grad[var_idx[kv]]-=loss;
+		}
+	}
+	history_enabled=1;
+}
+void			update_params(double *grad, int *var_idx, int nvars)
+{
+	for(int ke=1;ke<ecount;++ke)//bypass first lens
+	{
+		GlassElem *ge=elements+ke;
+		if(ge->active)
+		{
+			for(int kv=0;kv<nvars;++kv)
+				ge->vars[var_idx[kv]]+=grad[ecount*ke+var_idx[kv]];
+		}
+	}
+}
 
 
 double			VX=0, VY=0, DX=20, AR_Y=1, Xstep, Ystep;
@@ -671,17 +708,19 @@ void			render()
 			SetBkMode(ghMemDC, bkMode);
 
 			int y=0;
+			GUITPrint(ghMemDC, 0, y, 0, "T\t\tcenter at focus"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "tab\t\tselect glass element"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "space\t\ttoggle current glass element"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "1+left/right\tchange distance"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "2+left/right\tchange left radius"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "3+left/right\tchange thickness"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "4+left/right\tchange right radius"), y+=16;
+			GUITPrint(ghMemDC, 0, y, 0, "F\t\tflip glass element"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "O\t\toptimize"), y+=32;
 
 			GUITPrint(ghMemDC, 0, y, 0, "\t1 dist\t2 Rl\t3 Th\t4 Rr"), y+=16;
 			for(int k=0;k<ecount;++k)
-				GUITPrint(ghMemDC, 0, y, 0, "%c%c: %c\t%g\t%g\t%g\t%g", current_elem==k?'>':' ', 'A'+k, elements[k].active?'V':'X', elements[k].dist, elements[k].Rl, elements[k].th, elements[k].Rr), y+=16;
+				GUITPrint(ghMemDC, 0, y, 0, "%c%c: %c\t%g\t%g\t%g\t%g\t%s", current_elem==k?'>':' ', 'A'+k, elements[k].active?'V':'X', elements[k].dist, elements[k].Rl, elements[k].th, elements[k].Rr, current_elem==k?"<-":""), y+=16;
 
 			GUIPrint(ghMemDC, w>>3, h>>1, "Std.Dev %lf mm", 10*spread);
 
@@ -716,13 +755,6 @@ void			wnd_resize()
 	for(int k=hist_idx;k<w;++k)
 		history[k]=-1;
 	//memset(history+hist_idx, 0, (w-hist_idx)*sizeof(double));
-}
-void			change_diopter(double *r, double delta)
-{
-	if(*r)
-		*r=1/(1 / *r+delta);
-	else
-		*r=1/delta;
 }
 long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, long lParam)
 {
@@ -956,16 +988,16 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			{
 				double grad[16];
 				static double velocity[16]={0};
-				calc_grad(grad, 16, 0.01);
+				int var_idx[]={1, 3};//only optimize left & right radii
+				int nvars=SIZEOF(var_idx);
+				calc_grad(grad, 0.01, var_idx, nvars);
 				for(int k=0;k<16;++k)
 				{
 					if(grad[k])
-					{
-						velocity[k]=velocity[k]*0.9+grad[k]*grad[k];
-						grad[k]=-5*velocity[k];
-					}
+						velocity[k]=velocity[k]*0.5-0.0001*grad[k];
 				}
-				update_params(grad, 16);
+				update_params(velocity, var_idx, nvars);
+				EVAL();
 			}
 			break;
 	/*	case '1':
@@ -995,13 +1027,27 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 					EVAL();
 			}
 			break;
+		case 'T':
+			VX=ray_spread_mean, VY=0;
+			break;
+		case 'F':
+			{
+				GlassElem *ge=elements+current_elem;
+				if(ge->active)
+				{
+					double temp;
+					temp=ge->Rl, ge->Rl=ge->Rr, ge->Rr=temp;
+					EVAL();
+				}
+			}
+			break;
 		case 'R':
 			{
 				int e=0;
 				if(kb[VK_SHIFT])
 				{
 					e=1;
-					for(int k=0;k<ecount;++k)
+					for(int k=1;k<ecount;++k)//exclude first element
 					{
 						GlassElem *ge=elements+k;
 						ge->dist=k?4:0;
