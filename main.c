@@ -29,7 +29,7 @@ HBITMAP			hBitmap;
 const unsigned
 	_2dCheckColor=0x00E0E0E0,//0x00D0D0D0	0x00EFEFEF
 	_3dGridColor=0x00D0D0D0;
-HPEN			hPen=0, hPenRay=0, hPenLens=0;
+HPEN			hPen=0, hPenLens=0;
 HBRUSH			hBrush=0, hBrushHollow=0;
 int				w=0, h=0, X0, Y0;
 int				mx=0, my=0, kp=0;
@@ -82,6 +82,7 @@ typedef struct LineStruct
 int		nlines=0;
 //size_t	lines_bytes=0;
 Line	*lines=0;
+double	lambda=530;
 double	*ray_spread=0, ray_spread_mean=0;
 int		nhit=0;
 double	*history=0;
@@ -577,6 +578,32 @@ int				osc_color(int counter, int totalcount)
 	return r<<16|g<<8|b;//WinAPI
 //	return b<<16|g<<8|r;//OpenGL
 }
+double			gauss(double x)
+{
+	return exp(-x*x);
+}
+double			wavelength2color(double lambda, int idx)
+{
+	double
+		//		R	G	B
+		shift[]={560, 535, 450},
+		coeff[]={1./45, 1./45, 1./30};
+	return gauss(coeff[idx]*(lambda-shift[idx]));
+}
+int				wavelength2rgb(double lambda)
+{
+	unsigned char
+		r=(unsigned char)(255*wavelength2color(lambda, 0)),
+		g=(unsigned char)(255*wavelength2color(lambda, 1)),
+		b=(unsigned char)(255*wavelength2color(lambda, 2));
+	return r<<16|g<<8|b;//WinAPI
+//	return b<<16|g<<8|r;//OpenGL
+}
+double			wavelength2refractive_index(double lambda)
+{
+	return 1.60+(1.54-1.60)/(800-300)*(lambda-300);
+	//return 1.5+0.008*20*log(1+exp(1/20*-0.1*(lambda-450)));//approximated with softplus
+}
 void			render()
 {
 	memset(rgb, 0xFF, rgbn*sizeof(int));
@@ -585,6 +612,7 @@ void			render()
 	double DY=DX*h/(w*AR_Y);
 	if(h)
 	{
+		HPEN hPenRay=CreatePen(PS_SOLID, 1, wavelength2rgb(lambda));
 		double Xr=w/DX, Yr=h/DY;//unity in pixels
 		double Ystart=VY-DY/2, Yend=VY+DY/2, Xstart=VX-DX/2, Xend=VX+DX/2;
 		if(!clearScreen)
@@ -613,6 +641,8 @@ void			render()
 			LineTo(ghMemDC, real2screenX(ln->x2), real2screenY(ln->y2));
 		}
 		hPenRay=(HPEN)SelectObject(ghMemDC, hPenRay);
+		DeleteObject(hPenRay);
+
 		hPenLens=(HPEN)SelectObject(ghMemDC, hPenLens);
 		int segments=25;
 		double x=0, yreach=ap*0.5, topx1=0, topx2=0;
@@ -708,6 +738,7 @@ void			render()
 			SetBkMode(ghMemDC, bkMode);
 
 			int y=0;
+			GUITPrint(ghMemDC, 0, y, 0, "Crtl +/-\t\tchange wavelength"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "T\t\tcenter at focus"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "tab\t\tselect glass element"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "space\t\ttoggle current glass element"), y+=16;
@@ -722,7 +753,7 @@ void			render()
 			for(int k=0;k<ecount;++k)
 				GUITPrint(ghMemDC, 0, y, 0, "%c%c: %c\t%g\t%g\t%g\t%g\t%s", current_elem==k?'>':' ', 'A'+k, elements[k].active?'V':'X', elements[k].dist, elements[k].Rl, elements[k].th, elements[k].Rr, current_elem==k?"<-":""), y+=16;
 
-			GUIPrint(ghMemDC, w>>3, h>>1, "Std.Dev %lf mm", 10*spread);
+			GUIPrint(ghMemDC, w>>3, h*3>>2, "wavelength %lf, n %lf, Std.Dev %lf mm", lambda, n_float, 10*spread);
 
 		/*	GUIPrint(ghMemDC, 0, y, "Space: Toggle corrector"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "1: R2a\t%lf (Ctrl 1 To negate)", R2a), y+=16;
@@ -871,14 +902,24 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			}
 			if(kb[VK_ADD		]||kb[VK_RETURN	]||kb[VK_OEM_PLUS	])
 			{
-					 if(kb['X'])	DX/=1.05, AR_Y/=1.05;
+				if(kb[VK_CONTROL])
+				{
+					if(lambda<740)
+						lambda+=1, n_float=wavelength2refractive_index(lambda), e=1;
+				}
+				else if(kb['X'])	DX/=1.05, AR_Y/=1.05;
 				else if(kb['Y'])	AR_Y*=1.05;
 				else				DX/=1.05;
 				function1();
 			}
 			if(kb[VK_SUBTRACT	]||kb[VK_BACK	]||kb[VK_OEM_MINUS	])
 			{
-					 if(kb['X'])	DX*=1.05, AR_Y*=1.05;
+				if(kb[VK_CONTROL])
+				{
+					if(lambda>300)
+						lambda-=1, n_float=wavelength2refractive_index(lambda), e=1;
+				}
+				else if(kb['X'])	DX*=1.05, AR_Y*=1.05;
 				else if(kb['Y'])	AR_Y/=1.05;
 				else				DX*=1.05;
 				function1();
@@ -1127,7 +1168,6 @@ int __stdcall	WinMain(HINSTANCE hInstance, HINSTANCE hPrev, char *cmdargs, int n
 {
 	hPen=CreatePen(PS_SOLID, 1, _2dCheckColor);
 	hBrush=CreateSolidBrush(_2dCheckColor);
-	hPenRay=CreatePen(PS_SOLID, 1, 0x00FF0000);
 	hPenLens=CreatePen(PS_SOLID, 1, 0x00FF00FF);
 	hBrushHollow=(HBRUSH)GetStockObject(NULL_BRUSH);
 	WNDCLASSEXA wndClassEx=
