@@ -21,7 +21,7 @@
 #include<math.h>
 #include<Windows.h>
 
-//	#define		WAVELENGTH_IS_VARIABLE
+	#define		WAVELENGTH_IS_VARIABLE
 
 #define			SIZEOF(ST_ARR)	(sizeof(ST_ARR)/sizeof(*(ST_ARR)))
 #define			G_BUF_SIZE	2048
@@ -197,15 +197,18 @@ int				wavelength2rgb(double lambda)
 			break;
 		}
 	}
-	LambdaColor *v0=wrgb+L, *v1=wrgb+L+1;
-	float x=((float)lambda-v0->lambda)/(v1->lambda-v0->lambda);
-	int ret;
-	unsigned char *p=(unsigned char*)&ret;
-	p[0]=mixchar(v0->comp[2], v1->comp[2], x);
-	p[1]=mixchar(v0->comp[1], v1->comp[1], x);
-	p[2]=mixchar(v0->comp[0], v1->comp[0], x);
-	p[3]=0;
-	return ret;
+
+	return wrgb[L].color;
+
+	//LambdaColor *v0=wrgb+L, *v1=wrgb+L+1;
+	//float x=((float)lambda-v0->lambda)/(v1->lambda-v0->lambda);	//strange artifacts at same constant locations
+	//int ret;
+	//unsigned char *p=(unsigned char*)&ret;
+	//p[0]=mixchar(v0->comp[2], v1->comp[2], x);
+	//p[1]=mixchar(v0->comp[1], v1->comp[1], x);
+	//p[2]=mixchar(v0->comp[0], v1->comp[0], x);
+	//p[3]=0;
+	//return ret;
 }
 const double coeff_approx[]={1.87816, 1./8000};
 double			r_idx2wavelength(double n)
@@ -1001,7 +1004,7 @@ void			render()
 			for(int k=0;k<ecount;++k)
 				GUITPrint(ghMemDC, 0, y, 0, "%c%c: %c\t%g\t%g\t%g\t%g\t%s", current_elem==k?'>':' ', 'A'+k, elements[k].active?'V':'X', elements[k].dist, elements[k].Rl, elements[k].th, elements[k].Rr, current_elem==k?"<-":""), y+=16;
 #ifdef WAVELENGTH_IS_VARIABLE
-			GUIPrint(ghMemDC, w>>3, h*3>>2, "wavelength %lfnm, n %lf, F %lfcm, Std.Dev %lf mm", lambda, n_float, ray_spread_mean, 10*spread);
+			GUIPrint(ghMemDC, w>>3, h*3>>2, "wavelength %gnm, n %g, F %gcm, Std.Dev %lf mm", lambda, n_float, ray_spread_mean, 10*spread);
 #else
 			GUIPrint(ghMemDC, w>>3, h*3>>2, "F %lfcm, Std.Dev %g mm", ray_spread_mean, 10*spread);
 #endif
@@ -1017,6 +1020,12 @@ void			render()
 
 			GUIPrint(ghMemDC, w>>2, h>>2, "Std.Dev %lf mm", 10*spread);//*/
 		}
+		//for(int ky=0;ky<10;++ky)
+		//	for(int kx=0;kx<w;++kx)
+		//		rgb[w*((h>>1)+ky)+kx]=wavelength2rgb(wrgb[0].lambda+kx*(wrgb[wrgb_size-1].lambda-wrgb[0].lambda)/w);
+		//for(int ky=0;ky<10;++ky)
+		//	for(int kx=0;kx<wrgb_size;++kx)
+		//		rgb[w*((h>>1)+ky)+kx]=wrgb[kx].color;
 	}
 	
 	QueryPerformanceCounter(&li);
