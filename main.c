@@ -21,7 +21,7 @@
 #include<math.h>
 #include<Windows.h>
 
-	#define		WAVELENGTH_IS_VARIABLE
+//	#define		WAVELENGTH_IS_VARIABLE
 
 #define			SIZEOF(ST_ARR)	(sizeof(ST_ARR)/sizeof(*(ST_ARR)))
 #define			G_BUF_SIZE	2048
@@ -100,7 +100,12 @@ int		nhit=0;
 double	*history=0;
 int		hist_idx=0, history_enabled=1;
 
-int		nrays=25, nsurfaces=4;
+#ifdef WAVELENGTH_IS_VARIABLE
+int		nrays=25;
+#else
+int		nrays=9;
+#endif
+int		nsurfaces=4;
 int		correctorOn=1;
 
 int		line_buffer_size=0;
@@ -760,6 +765,7 @@ void			render()
 				LineTo(ghMemDC, real2screenX(ln->x2), real2screenY(ln->y2));
 			}
 			hPenRay=(HPEN)SelectObject(ghMemDC, hPenRay);
+			DeleteObject(hPenRay);
 		}
 #endif
 
