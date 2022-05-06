@@ -86,11 +86,144 @@ int		nlines=0;
 //size_t	lines_bytes=0;
 Line	*lines=0;
 
+#if 1
+typedef struct LambdaColorStruct
+{
+	float lambda;
+	union
+	{
+		int color;
+		char comp[4];
+	};
+} LambdaColor;
+LambdaColor wrgb[]=//https://en.wikipedia.org/wiki/File:Linear_visible_spectrum.svg
+{		//0xRRGGBB
+	{380, 0x020005},
+	{385, 0x020006},
+	{390, 0x030008},
+	{395, 0x04000A},
+	{400, 0x06000D},
+	{405, 0x080110},
+	{410, 0x0C0117},
+	{415, 0x11021F},
+	{420, 0x17032A},
+	{425, 0x1F053A},
+	{430, 0x25084B},
+	{435, 0x290A5C},
+	{440, 0x2B0E6F},
+	{445, 0x291380},
+	{450, 0x1F237B},
+	{455, 0x132E74},
+	{460, 0x09376C},
+	{465, 0x0A3E66},
+	{470, 0x0C4667},
+	{475, 0x0E4F6A},
+	{480, 0x10596C},
+	{485, 0x11636D},
+	{490, 0x146E6F},
+	{495, 0x177970},
+	{500, 0x178672},
+	{505, 0x1A9574},
+	{510, 0x1DA375},
+	{515, 0x1DB273},
+	{520, 0x20C070},
+	{525, 0x22CB6B},
+	{530, 0x21D662},
+	{535, 0x23E054},
+	{540, 0x36E842},
+	{545, 0x50ED28},
+	{550, 0x73EB22},
+	{555, 0x8FE722},
+	{560, 0xA5E221},
+	{565, 0xB9DC22},
+	{570, 0xCBD621},
+	{575, 0xDCCE20},
+	{580, 0xECC420},
+	{585, 0xF2B735},
+	{590, 0xF5AB42},
+	{595, 0xF69F49},
+	{600, 0xF7944B},
+	{605, 0xF98848},
+	{610, 0xFA7B42},
+	{615, 0xFB6C39},
+	{620, 0xFD5B2E},
+	{625, 0xFC471F},
+	{630, 0xF7300F},
+	{635, 0xEA220D},
+	{640, 0xD42215},
+	{645, 0xBF2318},
+	{650, 0xA92309},
+	{655, 0x981F07},
+	{660, 0x871B06},
+	{665, 0x771805},
+	{670, 0x671504},
+	{675, 0x591303},
+	{680, 0x4D1103},
+	{685, 0x420E02},
+	{690, 0x370C01},
+	{695, 0x2E0A01},
+	{700, 0x270801},
+	{705, 0x210600},
+	{710, 0x1E0400},
+	{715, 0x1A0300},
+	{720, 0x170200},
+	{725, 0x130100},
+	{730, 0x100100},
+	{735, 0x0C0100},
+	{740, 0x080100},
+	{745, 0x060100},
+	{750, 0x040100},
+};
+int				wrgb_size=SIZEOF(wrgb);
+char			mixchar(char v0, char v1, float x)
+{
+	return v0+(unsigned char)((v1-v0)*x);
+}
+int				wavelength2rgb(double lambda)
+{
+	int L=0, R=wrgb_size-1, middle;
+	if(lambda<wrgb[L].lambda||lambda>=wrgb[R].lambda)
+		return 0;
+	while(L<=R)
+	{
+		middle=(L+R)>>1;
+		if(wrgb[middle].lambda<lambda)
+			L=middle+1;
+		else if(wrgb[middle].lambda>lambda)
+			R=middle-1;
+		else
+		{
+			L=R=middle;
+			break;
+		}
+	}
+	LambdaColor *v0=wrgb+L, *v1=wrgb+L+1;
+	float x=((float)lambda-v0->lambda)/(v1->lambda-v0->lambda);
+	int ret;
+	unsigned char *p=(unsigned char*)&ret;
+	p[0]=mixchar(v0->comp[2], v1->comp[2], x);
+	p[1]=mixchar(v0->comp[1], v1->comp[1], x);
+	p[2]=mixchar(v0->comp[0], v1->comp[0], x);
+	p[3]=0;
+	return ret;
+}
+const double coeff_approx[]={1.87816, 1./8000};
+double			r_idx2wavelength(double n)
+{
+	return (1/(n-1)-coeff_approx[0])/coeff_approx[1];
+}
+double			wavelength2refractive_index(double lambda)
+{
+	return 1+1/(coeff_approx[1]*lambda+coeff_approx[0]);
+	//return 1.60+(1.54-1.60)/(800-300)*(lambda-300);
+	//return 1.5+0.008*20*log(1+exp(1/20*-0.1*(lambda-450)));//approximated with softplus
+}
+#endif
 //#ifdef WAVELENGTH_IS_VARIABLE
 double			lambda=565;//nm
 //#else
 #define			R_IDX_COUNT	3
-double			r_idx[R_IDX_COUNT]={1.516, 1.512, 1.507};//B->R
+double			r_idx[R_IDX_COUNT]={1.516, 1.513, 1.510};//B->R
 int				ray_idx[R_IDX_COUNT+1]={0};
 const int		ridx_count=SIZEOF(r_idx);
 //#endif
@@ -376,17 +509,6 @@ GlassElem		elements[]=
 	{0,		2,		30,		1,		-70},
 };
 int				ecount=SIZEOF(elements), current_elem=0;
-const double coeff_approx[]={1.87816, 1./8000};
-double			r_idx2wavelength(double n)
-{
-	return (1/(n-1)-coeff_approx[0])/coeff_approx[1];
-}
-double			wavelength2refractive_index(double lambda)
-{
-	return 1+1/(coeff_approx[1]*lambda+coeff_approx[0]);
-	//return 1.60+(1.54-1.60)/(800-300)*(lambda-300);
-	//return 1.5+0.008*20*log(1+exp(1/20*-0.1*(lambda-450)));//approximated with softplus
-}
 void			eval2(GlassElem *elements, int count, double n, double aperture, double xend)
 {
 	Point l1[2], l2[2];
@@ -695,7 +817,7 @@ int				osc_color(int counter, int totalcount)
 	return b<<16|g<<8|r;//OpenGL & WinAPI
 //	return r<<16|g<<8|b;//DIB
 }
-double			gauss(double x){return exp(-x*x);}
+/*double			gauss(double x){return exp(-x*x);}
 double			wavelength2color(double lambda, int idx)
 {
 	double
@@ -712,7 +834,7 @@ int				wavelength2rgb(double lambda)
 		b=(unsigned char)(255*wavelength2color(lambda, 2));
 	return b<<16|g<<8|r;//OpenGL & WinAPI
 //	return r<<16|g<<8|b;//DIB
-}
+}//*/
 void			render()
 {
 	memset(rgb, 0xFF, rgbn*sizeof(int));
