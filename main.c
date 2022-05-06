@@ -20,6 +20,9 @@
 #define	_USE_MATH_DEFINES
 #include<math.h>
 #include<Windows.h>
+
+	#define		WAVELENGTH_IS_VARIABLE
+
 #define			SIZEOF(ST_ARR)	(sizeof(ST_ARR)/sizeof(*(ST_ARR)))
 #define			G_BUF_SIZE	2048
 char			g_buf[G_BUF_SIZE]={0};
@@ -82,7 +85,16 @@ typedef struct LineStruct
 int		nlines=0;
 //size_t	lines_bytes=0;
 Line	*lines=0;
-double	lambda=530;
+
+//#ifdef WAVELENGTH_IS_VARIABLE
+double			lambda=565;//nm
+//#else
+#define			R_IDX_COUNT	3
+double			r_idx[R_IDX_COUNT]={1.516, 1.512, 1.507};//B->R
+int				ray_idx[R_IDX_COUNT+1]={0};
+const int		ridx_count=SIZEOF(r_idx);
+//#endif
+
 double	*ray_spread=0, ray_spread_mean=0;
 int		nhit=0;
 double	*history=0;
@@ -113,7 +125,7 @@ void	lines_init()
 }
 void	lines_insert(double x1, double y1, double x2, double y2)
 {
-	lines_alloc((nsurfaces+2)*nrays);
+//	lines_alloc((nsurfaces+2)*nrays);
 	Line *line=lines+nlines;
 	line->x1=x1;
 	line->y1=y1;
@@ -354,11 +366,22 @@ GlassElem		elements[]=
 {
 	//learned parameters (cm)
 	{1,		0,		51.2,	0.8,	1000},	//53cm gives 98cm
-	{1,		2,		16,		1,		-15},
-	{0,		2,		15.71,	1,		-15},
+	{1,		15.1,	16,		1,		-15},
+	{0,		2,		14,		1,		-10},
 	{0,		2,		30,		1,		-70},
 };
 int				ecount=SIZEOF(elements), current_elem=0;
+const double coeff_approx[]={1.87816, 1./8000};
+double			r_idx2wavelength(double n)
+{
+	return (1/(n-1)-coeff_approx[0])/coeff_approx[1];
+}
+double			wavelength2refractive_index(double lambda)
+{
+	return 1+1/(coeff_approx[1]*lambda+coeff_approx[0]);
+	//return 1.60+(1.54-1.60)/(800-300)*(lambda-300);
+	//return 1.5+0.008*20*log(1+exp(1/20*-0.1*(lambda-450)));//approximated with softplus
+}
 void			eval2(GlassElem *elements, int count, double n, double aperture, double xend)
 {
 	Point l1[2], l2[2];
@@ -440,7 +463,96 @@ void			eval2(GlassElem *elements, int count, double n, double aperture, double x
 	}
 	spread=variance;
 }
+void			eval3(GlassElem *elements, int count, double *ridx, int *ray_idx, int ridx_count, double aperture, double xend)
+{
+	Point l1[2], l2[2];
+	int hit;
+	GlassElem *ge;
+
+	ecount=count;
+	ray_spread=(double*)realloc(ray_spread, nrays*ridx_count*sizeof(double));
+	lines=(Line*)realloc(lines, ((count*2+2)*nrays*ridx_count)*sizeof(Line));
+	nlines=0;
+	nhit=0;
+	for(int kn=0;kn<ridx_count;++kn)
+	{
+		ray_idx[kn]=nlines;
+		//for(int kr=nrays-1;kr>=0;--kr)
+		for(int kr=0;kr<nrays;++kr)
+		{
+			l1[0].x=-10, l1[0].y=aperture*(kr+1)/(nrays+1)*0.5, l1[1].x=0, l1[1].y=l1[0].y;
+		//	lines_insert(l1[0].x, l1[0].y, l1[1].x, l1[1].y);
+			double x=0;
+			for(int k2=0;k2<count;++k2)
+			{
+				ge=elements+k2;
+				x+=ge->dist;
+				if(ge->active)
+				{
+					hit=refract_ray_surface(l1[0].x, l1[0].y, l1[1].x, l1[1].y, aperture, 1, ridx[kn], x, ge->Rl, l2);
+					if(!hit)
+					{
+						lines_insert(l1[0].x, l1[0].y, l1[1].x, l1[1].y);
+						break;
+					}
+					lines_insert(l1[0].x, l1[0].y, l2[0].x, l2[0].y);
+					if(hit==2)
+					{
+						lines_insert(l2[0].x, l2[0].y, l2[1].x, l2[1].y);
+						break;
+					}
+				}
+				x+=ge->th;
+				if(ge->active)
+				{
+					hit=refract_ray_surface(l2[0].x, l2[0].y, l2[1].x, l2[1].y, aperture, ridx[kn], 1, x, -ge->Rr, l1);
+					if(!hit)
+					{
+						lines_insert(l2[0].x, l2[0].y, l2[1].x, l2[1].y);
+						break;
+					}
+					lines_insert(l2[0].x, l2[0].y, l1[0].x, l1[0].y);
+					if(hit==2)
+					{
+						lines_insert(l1[0].x, l1[0].y, l1[1].x, l1[1].y);
+						break;
+					}
+				}
+			}
+			if(hit==1)
+			{
+				ray_spread[nhit]=extrapolate_y(l1[0].x, l1[0].y, l1[1].x, l1[1].y, 0);
+				if(ray_spread[nhit]>xend||l1[0].y<=l1[1].y)//if ray focuses beyond xend, or doesn't focus
+				{
+					double y=extrapolate_x(l1[0].x, l1[0].y, l1[1].x, l1[1].y, xend);
+					lines_insert(l1[0].x, l1[0].y, xend, y);
+				}
+				else
+					lines_insert(l1[0].x, l1[0].y, ray_spread[nhit], 0);
+				++nhit;
+			}
+		}
+	}
+	ray_idx[ridx_count]=nlines;
+	ray_spread_mean=0;
+	double variance=-1;
+	meanvar(ray_spread, nhit, &ray_spread_mean, &variance);
+	for(int kr=0;kr<nhit;++kr)
+		ray_spread[kr]-=ray_spread_mean;
+	//free(ray_spread);
+	variance=sqrt(variance);//standard deviation
+	if(history_enabled)
+	{
+		history[hist_idx]=variance;
+		++hist_idx, hist_idx%=w;
+	}
+	spread=variance;
+}
+#ifdef WAVELENGTH_IS_VARIABLE
 	#define	EVAL()	eval2(elements, ecount, n_float, ap, 300)
+#else
+	#define	EVAL()	eval3(elements, ecount, r_idx, ray_idx, ridx_count, ap, 300)
+#endif
 //	#define	EVAL()	spread=eval(ap, nrays, n_float, R1, t1, xdist, R2a, t2, R2b, xCCD, xCut)
 double			calc_loss()
 {
@@ -575,18 +687,15 @@ int				osc_color(int counter, int totalcount)
 	//	g=(unsigned char)(255*cos(f*counter+M_PI*2/3)),
 	//	b=(unsigned char)(255*cos(f*counter+M_PI*4/3));
 
-	return r<<16|g<<8|b;//WinAPI
-//	return b<<16|g<<8|r;//OpenGL
+	return b<<16|g<<8|r;//OpenGL & WinAPI
+//	return r<<16|g<<8|b;//DIB
 }
-double			gauss(double x)
-{
-	return exp(-x*x);
-}
+double			gauss(double x){return exp(-x*x);}
 double			wavelength2color(double lambda, int idx)
 {
 	double
 		//		R	G	B
-		shift[]={560, 535, 450},
+		shift[]={560, 535, 450},//nm
 		coeff[]={1./45, 1./45, 1./30};
 	return gauss(coeff[idx]*(lambda-shift[idx]));
 }
@@ -596,13 +705,8 @@ int				wavelength2rgb(double lambda)
 		r=(unsigned char)(255*wavelength2color(lambda, 0)),
 		g=(unsigned char)(255*wavelength2color(lambda, 1)),
 		b=(unsigned char)(255*wavelength2color(lambda, 2));
-	return r<<16|g<<8|b;//WinAPI
-//	return b<<16|g<<8|r;//OpenGL
-}
-double			wavelength2refractive_index(double lambda)
-{
-	return 1.60+(1.54-1.60)/(800-300)*(lambda-300);
-	//return 1.5+0.008*20*log(1+exp(1/20*-0.1*(lambda-450)));//approximated with softplus
+	return b<<16|g<<8|r;//OpenGL & WinAPI
+//	return r<<16|g<<8|b;//DIB
 }
 void			render()
 {
@@ -612,7 +716,6 @@ void			render()
 	double DY=DX*h/(w*AR_Y);
 	if(h)
 	{
-		HPEN hPenRay=CreatePen(PS_SOLID, 1, wavelength2rgb(lambda));
 		double Xr=w/DX, Yr=h/DY;//unity in pixels
 		double Ystart=VY-DY/2, Yend=VY+DY/2, Xstart=VX-DX/2, Xend=VX+DX/2;
 		if(!clearScreen)
@@ -632,16 +735,33 @@ void			render()
 			}
 			hPen=(HPEN)SelectObject(ghMemDC, hPen), hBrush=(HBRUSH)SelectObject(ghMemDC, hBrush);
 		}
-		Line *ln;
+#ifdef WAVELENGTH_IS_VARIABLE
+		HPEN hPenRay=CreatePen(PS_SOLID, 1, wavelength2rgb(lambda));
 		hPenRay=(HPEN)SelectObject(ghMemDC, hPenRay);
-		for(int k=0;k<nlines;++k)
+		for(int kl=0;kl<nlines;++kl)
 		{
-			ln=lines+k;
+			Line *ln=lines+kl;
 			MoveToEx(ghMemDC, real2screenX(ln->x1), real2screenY(ln->y1), 0);
 			LineTo(ghMemDC, real2screenX(ln->x2), real2screenY(ln->y2));
 		}
 		hPenRay=(HPEN)SelectObject(ghMemDC, hPenRay);
 		DeleteObject(hPenRay);
+#else
+		for(int kv=0;kv<ridx_count;++kv)
+		{
+			double wavelength=r_idx2wavelength(r_idx[kv]);
+			int color=wavelength2rgb(wavelength);
+			HPEN hPenRay=CreatePen(PS_SOLID, 1, color);
+			hPenRay=(HPEN)SelectObject(ghMemDC, hPenRay);
+			for(int kl=ray_idx[kv];kl<ray_idx[kv+1];++kl)
+			{
+				Line *ln=lines+kl;
+				MoveToEx(ghMemDC, real2screenX(ln->x1), real2screenY(ln->y1), 0);
+				LineTo(ghMemDC, real2screenX(ln->x2), real2screenY(ln->y2));
+			}
+			hPenRay=(HPEN)SelectObject(ghMemDC, hPenRay);
+		}
+#endif
 
 		hPenLens=(HPEN)SelectObject(ghMemDC, hPenLens);
 		int segments=25;
@@ -752,8 +872,11 @@ void			render()
 			GUITPrint(ghMemDC, 0, y, 0, "\t1 dist\t2 Rl\t3 Th\t4 Rr"), y+=16;
 			for(int k=0;k<ecount;++k)
 				GUITPrint(ghMemDC, 0, y, 0, "%c%c: %c\t%g\t%g\t%g\t%g\t%s", current_elem==k?'>':' ', 'A'+k, elements[k].active?'V':'X', elements[k].dist, elements[k].Rl, elements[k].th, elements[k].Rr, current_elem==k?"<-":""), y+=16;
-
-			GUIPrint(ghMemDC, w>>3, h*3>>2, "wavelength %lf, n %lf, Std.Dev %lf mm", lambda, n_float, 10*spread);
+#ifdef WAVELENGTH_IS_VARIABLE
+			GUIPrint(ghMemDC, w>>3, h*3>>2, "wavelength %lfnm, n %lf, F %lfcm, Std.Dev %lf mm", lambda, n_float, ray_spread_mean, 10*spread);
+#else
+			GUIPrint(ghMemDC, w>>3, h*3>>2, "F %lfcm, Std.Dev %g mm", ray_spread_mean, 10*spread);
+#endif
 
 		/*	GUIPrint(ghMemDC, 0, y, "Space: Toggle corrector"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "1: R2a\t%lf (Ctrl 1 To negate)", R2a), y+=16;
@@ -902,24 +1025,30 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			}
 			if(kb[VK_ADD		]||kb[VK_RETURN	]||kb[VK_OEM_PLUS	])
 			{
+#ifdef WAVELENGTH_IS_VARIABLE
 				if(kb[VK_CONTROL])
 				{
-					if(lambda<740)
+					if(lambda<750)
 						lambda+=1, n_float=wavelength2refractive_index(lambda), e=1;
 				}
-				else if(kb['X'])	DX/=1.05, AR_Y/=1.05;
+				else
+#endif
+				if(kb['X'])	DX/=1.05, AR_Y/=1.05;
 				else if(kb['Y'])	AR_Y*=1.05;
 				else				DX/=1.05;
 				function1();
 			}
 			if(kb[VK_SUBTRACT	]||kb[VK_BACK	]||kb[VK_OEM_MINUS	])
 			{
+#ifdef WAVELENGTH_IS_VARIABLE
 				if(kb[VK_CONTROL])
 				{
-					if(lambda>300)
+					if(lambda>380)
 						lambda-=1, n_float=wavelength2refractive_index(lambda), e=1;
 				}
-				else if(kb['X'])	DX*=1.05, AR_Y*=1.05;
+				else
+#endif
+				if(kb['X'])	DX*=1.05, AR_Y*=1.05;
 				else if(kb['Y'])	AR_Y/=1.05;
 				else				DX*=1.05;
 				function1();
@@ -1055,7 +1184,9 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			clearScreen=!clearScreen;
 			break;
 		case 'H':
-			memset(history, 0, w*sizeof(double));
+			for(int k=0;k<w;++k)
+				history[k]=-1;
+			//memset(history, 0, w*sizeof(double));
 			break;
 		case 'P':
 			{
@@ -1183,7 +1314,7 @@ int __stdcall	WinMain(HINSTANCE hInstance, HINSTANCE hPrev, char *cmdargs, int n
 		0, "New format", 0
 	};
 	RegisterClassExA(&wndClassEx);
-	ghWnd=CreateWindowExA(0, wndClassEx.lpszClassName, "Title", WS_CAPTION|WS_SYSMENU|WS_THICKFRAME|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_CLIPCHILDREN, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, 0, 0, hInstance, 0);
+	ghWnd=CreateWindowExA(0, wndClassEx.lpszClassName, "Lens Designer", WS_CAPTION|WS_SYSMENU|WS_THICKFRAME|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_CLIPCHILDREN, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, 0, 0, hInstance, 0);//20220504
 	
 		wnd_resize();
 		function1();
