@@ -94,6 +94,11 @@ void			array_free(ArrayHeader **pa)
 	free(*pa);
 	*pa=0;
 }
+void			array_clear(ArrayHeader **pa)
+{
+	ArrayHeader **p=(ArrayHeader**)pa;
+	p[0]->count=0;
+}
 ArrayHeader*	array_alloc(size_t esize, size_t count, size_t reserve, const char *debug_name)
 {
 	size_t size, cap;
@@ -201,23 +206,23 @@ typedef struct PointStruct
 {
 	double x, y;
 } Point;
-typedef struct LineStruct//can be cast to Point*
-{
-	double x1, y1, x2, y2;
-} Line;
+//typedef struct LineStruct//can be cast to Point*
+//{
+//	double x1, y1, x2, y2;
+//} Line;
 typedef struct PathStruct
 {
 	int emerged;
 	ArrayHeader *points;
 	double r_blur;
-	Line em_ray;//emergence ray
+	Point em_ray[2];//emergence ray
 } Path;
 typedef struct PhotonStruct
 {
 	double lambda;
 	int color;
 	ArrayHeader *paths;
-	Point em_centroid;
+	Point ground[2], em_centroid;
 } Photon;
 
 #if 1
@@ -359,18 +364,16 @@ double			wavelength2refractive_index(double lambda)
 {
 	return 1+1/(coeff_approx[1]*lambda+coeff_approx[0]);
 	//return 1.60+(1.54-1.60)/(800-300)*(lambda-300);
-	//return 1.5+0.008*20*log(1+exp(1/20*-0.1*(lambda-450)));//approximated with softplus
 }
 #endif
 #define			N_COUNT	3
 Photon			lightpaths[N_COUNT]={0};//a photon can take many paths, a path may or may not emerge on CCD
-double			n_base=1.512;//float glass
-double			n_deltas[N_COUNT]={0.0035, 0.001, -0.001};//B->R
+double			n_base=1.512;//refractive index of float glass
+double			n_deltas[N_COUNT]={0.0035, 0.001, -0.001};//blue->red
 const int		n_count=SIZEOF(lightpaths);
 double			total_blur=0, lambda0=0, lambda=590;//565nm
-int				twosides=0;
+int				twosides=1;
 
-//Point			*ray_spread=0;
 Point			ray_spread_mean[N_COUNT+1]={0};//last element is centroid
 double			*history=0;
 int				hist_idx=0, history_enabled=1;
@@ -381,6 +384,7 @@ double			ap=12;//aperture
 double			spread=0;
 
 int		sgn_star(double x){return 1-((x<0)<<1);}
+int		sgn_int(int n){return (n>0)-(n<0);}
 int		intersect_line_circle(double x1, double y1, double x2, double y2, double cx, double R, Point *ret_points)//https://mathworld.wolfram.com/Circle-LineIntersection.html
 {
 	double dx=x2-x1, dy=y2-y1, dr=sqrt(dx*dx+dy*dy);
@@ -533,26 +537,21 @@ void	line_make_perpendicular(Point *line, Point *position, Point *ret_line)
 	ret_line[1].x=ret_line[0].x+line[1].y-line[0].y;
 	ret_line[1].y=ret_line[0].y+line[1].x-line[0].x;
 }
-void	meanvar(double *arr, int count, int stride, double *ret_mean, double *ret_var, int skip_idx)
+void	meanvar(double *arr, int count, int stride, double *ret_mean, double *ret_var)
 {
 	double mean=0, var=0;
 	if(count>0)
 	{
-		int nvals=0;
+		int nvals=count;
 		count*=stride;
-		skip_idx*=stride;
 		for(int k=0;k<count;k+=stride)
-			if(k!=skip_idx)
-				mean+=arr[k], ++nvals;
+			mean+=arr[k];
 		mean/=nvals;
 		var=0;
 		for(int k=0;k<count;k+=stride)
 		{
-			if(k!=skip_idx)
-			{
-				double val=arr[k]-mean;
-				var+=val*val;
-			}
+			double val=arr[k]-mean;
+			var+=val*val;
 		}
 		var/=nvals;
 	}
@@ -595,11 +594,15 @@ GlassElem		*ebackup=0;
 int				ecount=SIZEOF(elements), current_elem=0;
 double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, double *n_deltas, int n_count, double aperture, double xend, double tan_tilt)
 {
-	Point l1[2], l2[2], ground[2];
+	Point l1[2], l2[2];
+	Point combined_ground[2]={0};
+	double combined_slope=0;
+	//Point ground[2];
 	GlassElem *ge;
 
-	int mirror_ray_count=(nrays+1)*twosides;
-	int ray_count=nrays+mirror_ray_count;
+	int mirror_ray_count=nrays*twosides;
+	//int mirror_ray_count=(nrays+1)*twosides;
+	int ray_count=nrays+1+mirror_ray_count;
 	for(int kn=0;kn<n_count;++kn)
 	{
 		Photon *lp=lightpaths+kn;
@@ -620,24 +623,26 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 	}
 	ArrayHeader *ray_spread=array_alloc(sizeof(Point), 0, ray_count*n_count, "Point ray_spread[ray_count*n_count]");
 	ArrayHeader *emerge_count=array_alloc(sizeof(int), n_count, n_count, "int emerge_count[n_count]");
-	ArrayHeader *bypass_groundray=array_alloc(sizeof(int), n_count, n_count, "int bypass_groundray[n_count]");
 
+	int n_wavelengths=0;
 	double xpad=100, xstart=0;
-	ground[1].x=xstart, ground[1].y=0;
-	ground[0].x=ground[1].x-xpad, ground[0].y=ground[1].y-xpad*tan_tilt;
+	//ground[1].x=xstart, ground[1].y=0;
+	//ground[0].x=ground[1].x-xpad, ground[0].y=ground[1].y-xpad*tan_tilt;
 	for(int kn=0;kn<n_count;++kn)//for each photon				simulate glass elements
 	{
 		double n=n_base+n_deltas[kn];
 		Photon *lp=lightpaths+kn;
-		int *n_emerged=(int*)array_at(&emerge_count, kn), *bypass_k=(int*)array_at(&bypass_groundray, kn);
+		int *n_emerged=(int*)array_at(&emerge_count, kn);
 		lp->lambda=r_idx2wavelength(n);
 		lp->color=wavelength2rgb(lp->lambda);
-		for(int start=-mirror_ray_count*twosides, kr=start;kr<nrays;++kr)//for each ray/path
+		for(int start=-mirror_ray_count*twosides, kr=start;kr<=nrays;++kr)//for each ray/path
 		{
 			Path *p=(Path*)array_at(&lp->paths, kr-start);
 			p->points=array_alloc(sizeof(Point), 0, ge_count*2+1, "Point lightpaths[k]::paths[ray_count]::points[ecount*2+1]");
 			double x=xstart;
-			l1[1].x=x, l1[1].y=aperture*(kr+1)/(nrays+1)*0.5;
+			l1[1].x=x;
+		//	l1[1].y=aperture*(kr+1)/(nrays+1)*0.5;
+			l1[1].y=aperture*0.5*kr/nrays;
 			l1[0].x=x-xpad, l1[0].y=l1[1].y-xpad*tan_tilt;
 			array_append(&p->points, l1);
 			for(int k2=0;k2<ge_count;++k2)//for each glass element
@@ -679,6 +684,17 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 			if(p->emerged==1)
 			{
 				Point point;
+				point.x=xend;
+				point.y=extrapolate_x(l1[0].x, l1[0].y, l1[1].x, l1[1].y, xend);
+				array_append(&p->points, &point);
+				p->em_ray[0].x=l1->x;//save last ray segment as emergence
+				p->em_ray[0].y=l1->y;
+				p->em_ray[1].x=point.x;
+				p->em_ray[1].y=point.y;
+			}
+		/*	if(p->emerged==1)
+			{
+				Point point;
 				p->emerged=intersect_lines(ground, l1, &point);
 				if(p->emerged)
 					p->emerged=l1[0].x<point.x;
@@ -700,46 +716,90 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 					p->em_ray.y2=point.y;
 					++*n_emerged;
 				}
-			}
+			}//*/
 			array_fit(&p->points);
 		}
+		*n_emerged=0;
+		memset(lp->ground, 0, 2*sizeof(Point));
+		for(int start=-mirror_ray_count*twosides, kr=start;kr<0;++kr)//for each ray/path
+		{
+			Path *p1=(Path*)array_at(&lp->paths, kr-start), *p2=(Path*)array_at(&lp->paths, -kr-start);
+			if(p1->emerged==1&&p2->emerged==1)
+			{
+				Point point;
+				intersect_lines(p1->em_ray, p2->em_ray, &point);
+				array_append(&ray_spread, &point);
+				if(!*n_emerged)
+					lp->ground[0]=lp->ground[1]=point;
+				else
+				{
+					if(lp->ground[0].x>point.x)
+						lp->ground[0]=point;
+					if(lp->ground[1].x<point.x)
+						lp->ground[1]=point;
+				}
+				++*n_emerged;
+			}
+		}
+		if(*n_emerged)
+		{
+			combined_ground[0].x+=lp->ground[0].x;
+			combined_ground[0].y+=lp->ground[0].y;
+			//double tan_th_num=lp->ground[1].y-lp->ground[0].y, tan_th_den=lp->ground[1].x-lp->ground[0].x;
+			//double
+			//	temp_num=combined_ground[1].y*tan_th_den+tan_th_num*combined_ground[1].x,
+			//	temp_den=tan_th_den*combined_ground[1].x-combined_ground[1].y*tan_th_num;
+			//combined_ground[1].y=temp_num;
+			//combined_ground[1].x=temp_den;
+			combined_slope+=atan2(lp->ground[1].y-lp->ground[0].y, lp->ground[1].x-lp->ground[0].x);
+			++n_wavelengths;
+		}
 	}
+	if(!n_wavelengths)
+		return 1e6;
+	combined_ground[0].x/=n_wavelengths;
+	combined_ground[0].y/=n_wavelengths;
+	combined_slope=tan(combined_slope/n_wavelengths);
+	combined_ground[1].x=combined_ground[0].x+1;
+	combined_ground[1].y=combined_ground[0].y+combined_slope;
+
 	Point variance_total={0};
 	Point *mean_total=ray_spread_mean+n_count;
 	mean_total->x=mean_total->y=0;
 	for(int kn=0, start=0;kn<n_count;++kn)					//find ground cross centroid
 	{
-		Point var={0}, *points=(Point*)array_at(&ray_spread, start);
-		int count=*(int*)array_at(&emerge_count, kn), bypass_idx=*(int*)array_at(&bypass_groundray, kn);
-		ray_spread_mean[kn].x=0;
-		ray_spread_mean[kn].y=0;
-		meanvar((double*)points, count, 2, &ray_spread_mean[kn].x, &var.x, bypass_idx);
-		meanvar((double*)points+1, count, 2, &ray_spread_mean[kn].y, &var.y, bypass_idx);
-		variance_total.x+=var.x;
-		variance_total.y+=var.y;
-		mean_total->x+=ray_spread_mean[kn].x;
-		mean_total->y+=ray_spread_mean[kn].y;
-		start+=count;
+		int count=*(int*)array_at(&emerge_count, kn);
+		if(count)
+		{
+			Point var={0}, *points=(Point*)array_at(&ray_spread, start);
+			ray_spread_mean[kn].x=0;
+			ray_spread_mean[kn].y=0;
+			meanvar((double*)points, count, 2, &ray_spread_mean[kn].x, &var.x);
+			meanvar((double*)points+1, count, 2, &ray_spread_mean[kn].y, &var.y);
+			variance_total.x+=var.x;
+			variance_total.y+=var.y;
+			mean_total->x+=ray_spread_mean[kn].x;
+			mean_total->y+=ray_spread_mean[kn].y;
+			start+=count;
+		}
 	}
 	array_free(&ray_spread);
 	array_free(&emerge_count);
-	array_free(&bypass_groundray);
 	mean_total->x/=n_count;
 	mean_total->y/=n_count;
 	variance_total.x=sqrt(variance_total.x/n_count);//standard deviation
 	variance_total.y=sqrt(variance_total.y/n_count);
 	double abs_stddev=sqrt(variance_total.x*variance_total.x+variance_total.y*variance_total.y);
 
-	int n_emerged=-1;
 	Point iplane[2], iplane_combined[2];
 	total_blur=0;
 	int total_npaths=0;
-	line_make_perpendicular(ground, ray_spread_mean+n_count, iplane_combined);
+	line_make_perpendicular(combined_ground, ray_spread_mean+n_count, iplane_combined);
 	for(int kn=0;kn<n_count;++kn)//for each photon (wavelength)			//cast rays on best image plane
 	{
 		Photon *lp=lightpaths+kn;
 		lp->em_centroid=ray_spread_mean[kn];
-		line_make_perpendicular(ground, ray_spread_mean+kn, iplane);
+		line_make_perpendicular(lp->ground, ray_spread_mean+kn, iplane);
 
 		int npaths=array_size(&lp->paths);
 		for(int kp=0;kp<npaths;++kp)//for each path
@@ -748,11 +808,13 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 			if(p->emerged)
 			{
 				Point cross;
-				int intersect=intersect_lines(iplane, (Point*)&p->em_ray, &cross);
+				int intersect=intersect_lines(iplane, p->em_ray, &cross);
 				if(intersect)
 				{
 					p->r_blur=distance(&lp->em_centroid, &cross);
-					intersect_lines(iplane_combined, (Point*)&p->em_ray, &cross);
+					if(p->r_blur>1)
+						break;
+					intersect_lines(iplane_combined, p->em_ray, &cross);
 					total_blur+=distance(ray_spread_mean+n_count, &cross);
 					++total_npaths;
 				}
@@ -908,40 +970,6 @@ double			draw_arc(double x, double R, double ap, ScaleConverter *scale, int nseg
 	}
 	return tx;
 }
-int				osc_color(int counter, int totalcount)
-{
-	unsigned char r, g, b;
-	r=0;
-	g=256*counter/totalcount;
-	b=0;
-
-	//double f=2*M_PI/totalcount;
-	//unsigned char
-	//	r=(unsigned char)(255*cos(f*counter)),
-	//	g=(unsigned char)(255*cos(f*counter+M_PI*2/3)),
-	//	b=(unsigned char)(255*cos(f*counter+M_PI*4/3));
-
-	return b<<16|g<<8|r;//OpenGL & WinAPI
-//	return r<<16|g<<8|b;//DIB
-}
-/*double			gauss(double x){return exp(-x*x);}
-double			wavelength2color(double lambda, int idx)
-{
-	double
-		//		R	G	B
-		shift[]={560, 535, 450},//nm
-		coeff[]={1./45, 1./45, 1./30};
-	return gauss(coeff[idx]*(lambda-shift[idx]));
-}
-int				wavelength2rgb(double lambda)
-{
-	unsigned char
-		r=(unsigned char)(255*wavelength2color(lambda, 0)),
-		g=(unsigned char)(255*wavelength2color(lambda, 1)),
-		b=(unsigned char)(255*wavelength2color(lambda, 2));
-	return b<<16|g<<8|r;//OpenGL & WinAPI
-//	return r<<16|g<<8|b;//DIB
-}//*/
 void			draw_curve(Point *points, int npoints, ScaleConverter *scale)
 {
 	for(int k=0;k<npoints-1;++k)
@@ -976,7 +1004,7 @@ void			render()
 			}
 			hPen=(HPEN)SelectObject(ghMemDC, hPen), hBrush=(HBRUSH)SelectObject(ghMemDC, hBrush);
 		}
-		for(int kn=0;kn<n_count;++kn)//draw light paths
+		for(int kn=0;kn<n_count;++kn)				//draw light paths
 		{
 			Photon *lp=lightpaths+kn;
 			HPEN hPenRay=CreatePen(PS_SOLID, 1, lp->color);
@@ -995,7 +1023,7 @@ void			render()
 		hPenLens=(HPEN)SelectObject(ghMemDC, hPenLens);
 		int segments=25;
 		double x=0, yreach=ap*0.5, topx1=0, topx2=0;
-		for(int k=0;k<ecount;++k)
+		for(int k=0;k<ecount;++k)					//draw glass elements
 		{
 			GlassElem *ge=elements+k;
 			x+=ge->dist;
@@ -1037,27 +1065,9 @@ void			render()
 			int xcenter=real2screenX(ray_spread_mean[n_count].x, scale),
 				ycenter=real2screenY(ray_spread_mean[n_count].y, scale);
 			int rx=(int)(total_blur*Xr), ry=(int)(total_blur*Yr);
-			Ellipse(ghMemDC, xcenter-rx, ycenter-ry, xcenter+rx, ycenter+ry);
+			Ellipse(ghMemDC, xcenter-rx, ycenter-ry, xcenter+rx, ycenter+ry);//combined blur circle
 		}
 		hBrushHollow=(HBRUSH)SelectObject(ghMemDC, hBrushHollow);
-	/*	if(ray_spread)//draw spread
-		{
-			hBrushHollow=(HBRUSH)SelectObject(ghMemDC, hBrushHollow);
-			for(int kn=0;kn<n_count;++kn)
-			{
-				int xcenter=real2screenX(ray_spread_mean[kn].x, pscale), ycenter=real2screenY(ray_spread_mean[kn].y, pscale);
-				for(int k=0;k<nrays;++k)
-				{
-					int r=(int)(ray_spread[k]*Xr);
-					HPEN tempPen=(HPEN)CreatePen(PS_SOLID, 1, osc_color(k, nrays));
-					tempPen=(HPEN)SelectObject(ghMemDC, tempPen);
-					Ellipse(ghMemDC, xcenter-r, ycenter-r, xcenter+r, ycenter+r);
-					tempPen=(HPEN)SelectObject(ghMemDC, tempPen);
-					DeleteObject(tempPen);
-				}
-			}
-			hBrushHollow=(HBRUSH)SelectObject(ghMemDC, hBrushHollow);
-		}//*/
 
 		if(!clearScreen)
 		{
@@ -1102,6 +1112,13 @@ void			render()
 			MoveToEx(ghMemDC, 0, H, 0), LineTo(ghMemDC, w, H), MoveToEx(ghMemDC, V, 0, 0), LineTo(ghMemDC, V, h);
 			SetBkMode(ghMemDC, bkMode);
 
+			for(int k=0;k<n_count;++k)//
+			{
+				Photon *lp=lightpaths+k;
+				MoveToEx(ghMemDC, real2screenX(lp->ground[0].x, scale), real2screenY(lp->ground[0].y, scale), 0);
+				LineTo(ghMemDC, real2screenX(lp->ground[1].x, scale), real2screenY(lp->ground[1].y, scale));
+			}
+
 			int y=0;
 			GUITPrint(ghMemDC, 0, y, 0, "Shift +/-\t\ttilt"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "Crtl +/-\t\tchange wavelength"), y+=16;
@@ -1121,24 +1138,7 @@ void			render()
 			Point *point=ray_spread_mean+n_count;
 			double focus=sqrt(point->x*point->x+point->y*point->y);
 			GUIPrint(ghMemDC, w>>3, h*3>>2, "wavelength %gnm, n %g, F %gcm, Std.Dev %lfmm", lambda, n_base, focus, 10*spread);
-
-		/*	GUIPrint(ghMemDC, 0, y, "Space: Toggle corrector"), y+=16;
-			GUITPrint(ghMemDC, 0, y, 0, "1: R2a\t%lf (Ctrl 1 To negate)", R2a), y+=16;
-			GUITPrint(ghMemDC, 0, y, 0, "2: R2b\t%lf", R2b), y+=16;
-			GUITPrint(ghMemDC, 0, y, 0, "3: thickness\t%lf", t2), y+=16;
-			GUITPrint(ghMemDC, 0, y, 0, "4: distance\t%lf", xdist), y+=16;
-		//	GUITPrint(ghMemDC, 0, y, 0, "5: xCCD"), y+=16;
-			GUIPrint(ghMemDC, 0, y, "Shift R: Reset settings"), y+=16;
-			GUIPrint(ghMemDC, 0, y, "Ctrl Wheel: Change ray count");
-
-			GUIPrint(ghMemDC, w>>2, h>>2, "Std.Dev %lf mm", 10*spread);//*/
 		}
-		//for(int ky=0;ky<10;++ky)
-		//	for(int kx=0;kx<w;++kx)
-		//		rgb[w*((h>>1)+ky)+kx]=wavelength2rgb(wrgb[0].lambda+kx*(wrgb[wrgb_size-1].lambda-wrgb[0].lambda)/w);
-		//for(int ky=0;ky<10;++ky)
-		//	for(int kx=0;kx<wrgb_size;++kx)
-		//		rgb[w*((h>>1)+ky)+kx]=wrgb[kx].color;
 	}
 	
 	QueryPerformanceCounter(&li);
@@ -1232,31 +1232,6 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				if(kb[VK_LEFT	]&&ge->active)	change_diopter(&ge->Rr, 0.01*dx), e=1;
 				if(kb[VK_RIGHT	]&&ge->active)	change_diopter(&ge->Rr, -0.01*dx), e=1;
 			}
-		/*	if(kb['1']||kb[VK_NUMPAD1])//R2a
-			{
-				if(kb[VK_LEFT	])	R2a-=2*dx, e=1;
-				if(kb[VK_RIGHT	])	R2a+=2*dx, e=1;
-			}
-			else if(kb['2']||kb[VK_NUMPAD2])//R2b
-			{
-				if(kb[VK_LEFT	])	R2b-=2*dx, e=1;
-				if(kb[VK_RIGHT	])	R2b+=2*dx, e=1;
-			}
-			else if(kb['3']||kb[VK_NUMPAD3])//t2
-			{
-				if(kb[VK_LEFT	])	t2-=1.2*dx, e=1;
-				if(kb[VK_RIGHT	])	t2+=1.2*dx, e=1;
-			}
-			else if(kb['4']||kb[VK_NUMPAD4])//separation
-			{
-				if(kb[VK_LEFT	])	xdist-=0.9*dx, e=1;
-				if(kb[VK_RIGHT	])	xdist+=0.9*dx, e=1;
-			}
-			else if(kb['5']||kb[VK_NUMPAD5])//separation
-			{
-				if(kb[VK_LEFT	])	xCCD-=dx, e=1;
-				if(kb[VK_RIGHT	])	xCCD+=dx, e=1;
-			}//*/
 			else if(_2d_drag_graph_not_window)
 			{
 				if(kb[VK_LEFT	])	VX+=10*DX/w;
@@ -1281,7 +1256,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				else if(kb[VK_SHIFT])
 				{
 					if(tan_tilt<0.7071)
-						tan_tilt+=0.00005*DX, e=1;
+						tan_tilt+=0.00002*DX, e=1;
 				}
 				else if(kb['X'])	DX/=1.05, AR_Y/=1.05;
 				else if(kb['Y'])	AR_Y*=1.05;
@@ -1298,7 +1273,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				else if(kb[VK_SHIFT])
 				{
 					if(tan_tilt>-0.7071)
-						tan_tilt-=0.00005*DX, e=1;
+						tan_tilt-=0.00002*DX, e=1;
 				}
 				else if(kb['X'])	DX*=1.05, AR_Y*=1.05;
 				else if(kb['Y'])	AR_Y/=1.05;
@@ -1429,23 +1404,12 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				EVAL();
 			}
 			break;
-	/*	case '1':
-			if(kb[VK_CONTROL])
-				R2a=-R2a;
-			EVAL();
-			break;
-		case '2':
-			if(kb[VK_CONTROL])
-				R2b=-R2b;
-			EVAL();
-			break;//*/
 		case 'C':
 			clearScreen=!clearScreen;
 			break;
 		case 'H':
 			for(int k=0;k<w;++k)
 				history[k]=-1;
-			//memset(history, 0, w*sizeof(double));
 			break;
 		case 'P':
 			{
@@ -1462,10 +1426,10 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			VX=ray_spread_mean[n_count].x;
 			VY=ray_spread_mean[n_count].y;
 			break;
-		case 'M':
-			twosides=!twosides;
-			EVAL();
-			break;
+		//case 'M':
+		//	twosides=!twosides;
+		//	EVAL();
+		//	break;
 		case 'F':
 			{
 				GlassElem *ge=elements+current_elem;
@@ -1486,14 +1450,6 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 					tan_tilt=0;
 					lambda=lambda0;
 					memcpy(elements, ebackup, ecount*sizeof(GlassElem));
-					//for(int k=1;k<ecount;++k)//exclude first element
-					//{
-					//	GlassElem *ge=elements+k;
-					//	ge->dist=k?4:0;
-					//	ge->Rl=100;
-					//	ge->th=0.8;
-					//	ge->Rr=100;
-					//}
 				}
 				else if(kb['1'])
 					e=1, elements[current_elem].dist=current_elem?4:0;
@@ -1512,20 +1468,12 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 					VX=VY=0;
 				}
 			}
-			//if(kb[VK_SHIFT])
-			//{
-			//	xdist=5, R2a=50, t2=2, R2b=-50;
-			//	EVAL();
-			//}
 			break;
 		case 'E':
 			if(kb[VK_CONTROL])
 				DX=20;
 			else
 				DX/=sqrt(AR_Y);//average zoom
-		//	DX/=sqrt(AR_Y);
-		//	if(kb[VK_CONTROL])
-		//		DX=20;
 			AR_Y=1, function1();
 			break;
 		case VK_F8://toggle 2d drag convention
