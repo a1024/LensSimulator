@@ -20,9 +20,6 @@
 #define	_USE_MATH_DEFINES
 #include<math.h>
 #include<Windows.h>
-
-	#define		WAVELENGTH_IS_VARIABLE
-
 #define			SIZEOF(ST_ARR)	(sizeof(ST_ARR)/sizeof(*(ST_ARR)))
 #define			G_BUF_SIZE	2048
 char			g_buf[G_BUF_SIZE]={0};
@@ -74,17 +71,154 @@ int				mod(int x, int n)
 	return x;
 }
 
+typedef struct ArrayHeaderStruct
+{
+	size_t count, esize, cap;//cap is in bytes
+	const char *debug_name;
+	union
+	{
+		unsigned char data[];
+	//	char i8data[];
+	//	unsigned short u16data[];
+	//	short i16data[];
+	//	unsigned u32data[];
+		int i32data[];
+	//	unsigned long long u64data[];
+	//	long long i64data[];
+	//	float f32data[];
+		double fdata[];
+	};
+} ArrayHeader;
+void			array_free(ArrayHeader **pa)
+{
+	free(*pa);
+	*pa=0;
+}
+ArrayHeader*	array_alloc(size_t esize, size_t count, size_t reserve, const char *debug_name)
+{
+	size_t size, cap;
+	ArrayHeader *p;
+
+	if(reserve<count)
+		reserve=count;
+	size=reserve*esize, cap=esize;
+	for(;cap<size;cap<<=1);
+	p=(ArrayHeader*)malloc(sizeof(ArrayHeader)+cap);
+	p->count=count;
+	p->esize=esize;
+	p->cap=cap;
+	p->debug_name=debug_name;
+	memset(p->data, 0, cap);
+	return p;
+}
+void			array_realloc(ArrayHeader **pa, size_t count)
+{
+	ArrayHeader **p=(ArrayHeader**)pa, *p2;
+	size_t size=count*p[0]->esize, newcap=p[0]->esize;
+	for(;newcap<size;newcap<<=1);
+	if(newcap>p[0]->cap)
+	{
+		p2=(ArrayHeader*)realloc(*p, newcap);
+		if(!p2);//TODO: log error
+		*p=p2;
+		if(p[0]->cap<newcap)
+			memset(p[0]->data+p[0]->cap, 0, newcap-p[0]->cap);
+		p[0]->cap=newcap;
+	}
+	p[0]->count=count;
+}
+void*			array_append(ArrayHeader **pa, void *val)
+{
+	ArrayHeader **p=(ArrayHeader**)pa;
+	size_t offset=p[0]->count*p[0]->esize;
+	array_realloc(pa, p[0]->count+1);
+	if(val)
+		memcpy(p[0]->data+offset, val, p[0]->esize);
+	return p[0]->data+offset;
+}
+void*			array_insert(ArrayHeader **pa, size_t idx, void *data, size_t count)
+{
+	ArrayHeader **p=(ArrayHeader**)pa;
+	size_t o_src=idx*p[0]->esize, newsize=count*p[0]->esize, o_dst=o_src+newsize, move_size=p[0]->count*p[0]->esize-o_src;
+	array_realloc(pa, p[0]->count+count);
+	memmove(p[0]->data+o_dst, p[0]->data+o_src, move_size);
+	if(data)
+		memcpy(p[0]->data+o_src, data, newsize);
+	return p[0]->data+o_src;
+}
+void			array_fit(ArrayHeader **pa)
+{
+	ArrayHeader **p;
+	if(!*pa)
+		return;
+	p=(ArrayHeader**)pa;
+	p[0]->cap=p[0]->count*p[0]->esize;
+	*p=(ArrayHeader*)realloc(*p, sizeof(ArrayHeader)+p[0]->cap);
+}
+size_t			array_size(ArrayHeader const **pa)
+{
+	ArrayHeader **p=(ArrayHeader**)pa;
+	if(!p[0])
+		return 0;
+	return p[0]->count;
+}
+void*			array_at(ArrayHeader **pa, size_t idx)
+{
+	ArrayHeader **p=(ArrayHeader**)pa;
+	if(!p[0])
+		return 0;
+	if(idx>=p[0]->count)
+		return 0;
+	return p[0]->data+idx*p[0]->esize;
+}
+const void*		array_at_const(ArrayHeader const **pa, int idx)
+{
+	ArrayHeader const **p=(ArrayHeader const**)pa;
+	if(!p[0])
+		return 0;
+	return p[0]->data+idx*p[0]->esize;
+}
+void*			array_back(ArrayHeader **pa)
+{
+	ArrayHeader **p=(ArrayHeader**)pa;
+	if(!p[0])
+		return 0;
+	return p[0]->data+(p[0]->count-1)*p[0]->esize;
+}
+const void*		array_back_const(ArrayHeader const **pa)
+{
+	ArrayHeader const **p=(ArrayHeader const**)pa;
+	if(!p[0])
+		return 0;
+	return p[0]->data+(p[0]->count-1)*p[0]->esize;
+}
+#define			ARRAY_I(ARR, IDX)			(int*)array_at(&ARR, IDX)
+#define			ARRAY_U(ARR, IDX)			(unsigned*)array_at(&ARR, IDX)
+#define			ARRAY_F(ARR, IDX)			(double*)array_at(&ARR, IDX)
+#define			ARRAY_P(ARR, IDX)			(Point*)array_at(&ARR, IDX)
+
 typedef struct PointStruct
 {
 	double x, y;
 } Point;
-typedef struct LineStruct
+typedef struct LineStruct//can be cast to Point*
 {
 	double x1, y1, x2, y2;
 } Line;
-int		nlines=0;
-//size_t	lines_bytes=0;
-Line	*lines=0;
+typedef struct PathStruct
+{
+	int emerged;
+	ArrayHeader *points;
+	double r_blur;
+	Line em_ray;//emergence ray
+} Path;
+typedef struct PhotonStruct
+{
+	double lambda;
+	int color;
+	ArrayHeader *paths;
+	Point em_centroid;
+} Photon;
 
 #if 1
 typedef struct LambdaColorStruct
@@ -197,8 +331,14 @@ int				wavelength2rgb(double lambda)
 			break;
 		}
 	}
-
-	return wrgb[L].color;
+	
+	int ret;
+	unsigned char *p=(unsigned char*)&ret;
+	p[0]=wrgb[L].comp[2];
+	p[1]=wrgb[L].comp[1];
+	p[2]=wrgb[L].comp[0];
+	p[3]=0;
+	return ret;
 
 	//LambdaColor *v0=wrgb+L, *v1=wrgb+L+1;
 	//float x=((float)lambda-v0->lambda)/(v1->lambda-v0->lambda);	//strange artifacts at same constant locations
@@ -222,58 +362,23 @@ double			wavelength2refractive_index(double lambda)
 	//return 1.5+0.008*20*log(1+exp(1/20*-0.1*(lambda-450)));//approximated with softplus
 }
 #endif
-//#ifdef WAVELENGTH_IS_VARIABLE
-double			lambda=565;//nm
-//#else
-#define			R_IDX_COUNT	3
-double			r_idx[R_IDX_COUNT]={1.516, 1.513, 1.510};//B->R
-int				ray_idx[R_IDX_COUNT+1]={0};
-const int		ridx_count=SIZEOF(r_idx);
-//#endif
+#define			N_COUNT	3
+Photon			lightpaths[N_COUNT]={0};//a photon can take many paths, a path may or may not emerge on CCD
+double			n_base=1.512;//float glass
+double			n_deltas[N_COUNT]={0.0035, 0.001, -0.001};//B->R
+const int		n_count=SIZEOF(lightpaths);
+double			total_blur=0, lambda0=0, lambda=590;//565nm
+int				twosides=0;
 
-double	*ray_spread=0, ray_spread_mean=0;
-int		nhit=0;
-double	*history=0;
-int		hist_idx=0, history_enabled=1;
+//Point			*ray_spread=0;
+Point			ray_spread_mean[N_COUNT+1]={0};//last element is centroid
+double			*history=0;
+int				hist_idx=0, history_enabled=1;
 
-#ifdef WAVELENGTH_IS_VARIABLE
-int		nrays=25;
-#else
-int		nrays=9;
-#endif
-int		nsurfaces=4;
-int		correctorOn=1;
-
-int		line_buffer_size=0;
-void	lines_alloc(int count)
-{
-	//if(!lines_bytes)
-	//	lines_bytes=1;
-	//for(;count*sizeof(Line)>=lines_bytes;lines_bytes<<=1);
-	//lines=(Line*)realloc(lines, lines_bytes);
-
-	if(count!=line_buffer_size)
-	{
-		lines=(Line*)realloc(lines, count*sizeof(Line));
-		line_buffer_size=count;
-	}
-}
-void	lines_init()
-{
-	ray_spread=(double*)realloc(ray_spread, nrays*sizeof(double));
-	lines_alloc((nsurfaces+2)*nrays);
-	nlines=0;
-}
-void	lines_insert(double x1, double y1, double x2, double y2)
-{
-//	lines_alloc((nsurfaces+2)*nrays);
-	Line *line=lines+nlines;
-	line->x1=x1;
-	line->y1=y1;
-	line->x2=x2;
-	line->y2=y2;
-	++nlines;
-}
+int				nrays=5;
+double			tan_tilt=0;
+double			ap=12;//aperture
+double			spread=0;
 
 int		sgn_star(double x){return 1-((x<0)<<1);}
 int		intersect_line_circle(double x1, double y1, double x2, double y2, double cx, double R, Point *ret_points)//https://mathworld.wolfram.com/Circle-LineIntersection.html
@@ -387,112 +492,75 @@ int		refract_ray_surface(double x1, double y1, double x2, double y2, double aper
 }
 double	extrapolate_x(double x1, double y1, double x2, double y2, double xCCD){return y1+(y2-y1)/(x2-x1)*(xCCD-x1);}
 double	extrapolate_y(double x1, double y1, double x2, double y2, double yground){return x1+(x2-x1)/(y2-y1)*(yground-y1);}
-void	meanvar(double *arr, int size, double *ret_mean, double *ret_var)
+double	distance(Point *p1, Point *p2)
+{
+	double dx=p2->x-p1->x, dy=p2->y-p1->y;
+	return sqrt(dx*dx+dy*dy);
+}
+int		intersect_lines(Point *l1, Point *l2, Point *ret)//returns perpendicular distance in ret->x when the lines are parallel
+{
+	double
+		*x[]={&l1[0].x, &l1[1].x, &l2[0].x, &l2[1].x},
+		*y[]={&l1[0].y, &l1[1].y, &l2[0].y, &l2[1].y};
+#define X(IDX)	(*x[IDX-1])
+#define Y(IDX)	(*y[IDX-1])
+	double dx1=X(1)-X(2), dy1=Y(1)-Y(2), dx2=X(3)-X(4), dy2=Y(3)-Y(4);
+	double D=dx1*dy2-dy1*dx2;
+	if(D)
+	{
+		double a=(X(1)*Y(2)-Y(1)*X(2))/D, b=(X(3)*Y(4)-Y(3)*X(4))/D;
+		ret->x=a*dx2-b*dx1;
+		ret->y=a*dy2-b*dy1;
+		return 1;
+	}
+	ret->x=(-dx1*(Y(1)-Y(3))-(X(1)-X(3))*-dy1)/sqrt(dx1*dx1+dy1*dy1);
+	ret->y=0;
+	return 0;
+#undef X
+#undef Y
+}
+void	project_on_line(Point *line, Point *p, Point *ret)
+{
+	double
+		dx=line[1].x-line[0].x, dy=line[1].y-line[0].y,
+		t=(p->x*dx+p->y*dy)/(dx*dx+dy*dy);
+	ret->x=t*dx;
+	ret->y=t*dy;
+}
+void	line_make_perpendicular(Point *line, Point *position, Point *ret_line)
+{
+	ret_line[0]=*position;
+	ret_line[1].x=ret_line[0].x+line[1].y-line[0].y;
+	ret_line[1].y=ret_line[0].y+line[1].x-line[0].x;
+}
+void	meanvar(double *arr, int count, int stride, double *ret_mean, double *ret_var, int skip_idx)
 {
 	double mean=0, var=0;
-	if(size>0)
+	if(count>0)
 	{
-		for(int k=0;k<size;++k)
-			mean+=arr[k];
-		mean/=size;
+		int nvals=0;
+		count*=stride;
+		skip_idx*=stride;
+		for(int k=0;k<count;k+=stride)
+			if(k!=skip_idx)
+				mean+=arr[k], ++nvals;
+		mean/=nvals;
 		var=0;
-		for(int k=0;k<size;++k)
+		for(int k=0;k<count;k+=stride)
 		{
-			double val=arr[k]-mean;
-			var+=val*val;
+			if(k!=skip_idx)
+			{
+				double val=arr[k]-mean;
+				var+=val*val;
+			}
 		}
-		var/=size;
+		var/=nvals;
 	}
 	if(ret_mean)
 		*ret_mean=mean;
 	if(ret_var)
 		*ret_var=var;
 }
-#if 0
-double	eval(double aperture, int nrays, double n, double R1, double t1, double xdist, double R2a, double t2, double R2b, double xCCD, double xend)//returns standard deviation of rays
-{
-	Point ln1[2], ln2[2];
-	int intersect;
-	lines_init();
-	nhit=0;
-	for(int k=0;k<nrays;++k)
-	{
-		double ystart=aperture*(k+1)/nrays*0.5, x=0;
-		intersect=refract_ray_surface(-10, ystart, x, ystart, aperture, 1, n, x, R1, ln1);
-		if(!intersect)
-		{
-			lines_insert(-10, ystart, 0, ystart);
-			continue;
-		}
-		lines_insert(-10, ystart, ln1[0].x, ln1[0].y);
-
-		x+=t1;
-
-		intersect=refract_ray_surface(ln1[0].x, ln1[0].y, ln1[1].x, ln1[1].y, aperture, n, 1, x, 0, ln2);
-		if(!intersect)
-		{
-			lines_insert(ln1[0].x, ln1[0].y, ln1[1].x, ln1[1].y);
-			continue;
-		}
-		lines_insert(ln1[0].x, ln1[0].y, ln2[0].x, ln2[0].y);
-
-		x+=xdist;
-
-		if(correctorOn)
-		{
-			intersect=refract_ray_surface(ln2[0].x, ln2[0].y, ln2[1].x, ln2[1].y, aperture, 1, n, x, R2a, ln1);
-			if(!intersect)
-			{
-				lines_insert(ln2[0].x, ln2[0].y, ln2[1].x, ln2[1].y);
-				continue;
-			}
-		}
-		lines_insert(ln2[0].x, ln2[0].y, ln1[0].x, ln1[0].y);
-
-		x+=t2;
-		
-		if(correctorOn)
-		{
-			intersect=refract_ray_surface(ln1[0].x, ln1[0].y, ln1[1].x, ln1[1].y, aperture, n, 1, x, -R2b, ln2);
-			if(!intersect)
-			{
-				lines_insert(ln1[0].x, ln1[0].y, ln1[1].x, ln1[1].y);
-				continue;
-			}
-		}
-		lines_insert(ln1[0].x, ln1[0].y, ln2[0].x, ln2[0].y);
-
-		double y=extrapolate_x(ln2[0].x, ln2[0].y, ln2[1].x, ln2[1].y, xend);
-		lines_insert(ln2[0].x, ln2[0].y, xend, y);
-		ray_spread[nhit]=extrapolate_y(ln2[0].x, ln2[0].y, ln2[1].x, ln2[1].y, 0);
-		//ray_spread[nhit]=extrapolate_x(ln2[0].x, ln2[0].y, ln2[1].x, ln2[1].y, xCCD);
-
-		++nhit;
-	}
-	ray_spread_mean=0;
-	double variance=-1;
-	meanvar(ray_spread, nhit, &ray_spread_mean, &variance);
-	for(int k=0;k<nhit;++k)
-		ray_spread[k]-=ray_spread_mean;
-	//free(ray_spread);
-	variance=sqrt(variance);
-	history[hist_idx]=variance;
-	++hist_idx, hist_idx%=w;
-	return variance;
-}
-#endif
-double
-	n_float=1.512, ap=12,//pre-determined
-
-	//DEPRECATED
-	t1=0.8, R1=51.2, xdist=16, R2a=30, t2=1, R2b=-70,//std dev = 0.445444mm
-//	t1=0.8, R1=51.2, xdist=16, R2a=30, t2=1, R2b=-70,
-//	xdist=5, R2a=50, t2=2, R2b=-50,
-//	xdist=4, R2a=100, t2=2, R2b=100,
-
-	f1=100,//unused
-	xCCD=99.07, xCut=200;
-double spread=0;
 
 typedef struct GlassElemStruct
 {
@@ -508,187 +576,207 @@ GlassElem		elements[]=
 	//learned parameters (cm)
 	{1,		0,		51.2,	0.8,	1000},	//53cm gives 98cm
 	{1,		15.1,	16,		1,		-15},
-	{0,		2,		14,		1,		-10},
-	{0,		2,		30,		1,		-70},
+	{0,		2,		10,		1,		-10},
+	{0,		2,		10,		1,		-10},
+
+#if 0
+	{1,		0,		40,		2,		40},
+	{1,		1,		-40,	2,		4000},
+	{1,		2,		40,		4,		-40},
+	{1,		0.8,	40,		2,		40},
+
+	{1,		2,		40,		5,		40},
+	{1,		0.8,	-40,	5,		4000},
+
+	{1,		1,		32,		4,		32},
+#endif
 };
+GlassElem		*ebackup=0;
 int				ecount=SIZEOF(elements), current_elem=0;
-void			eval2(GlassElem *elements, int count, double n, double aperture, double xend)
+double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, double *n_deltas, int n_count, double aperture, double xend, double tan_tilt)
 {
-	Point l1[2], l2[2];
-	int hit;
+	Point l1[2], l2[2], ground[2];
 	GlassElem *ge;
 
-	ecount=count;
-	ray_spread=(double*)realloc(ray_spread, nrays*sizeof(double));
-	lines=(Line*)realloc(lines, ((count*2+2)*nrays)*sizeof(Line));
-//	lines_alloc((count*2+2)*nrays);
-	nlines=0;
-	nhit=0;
-	//for(int k=nrays-1;k>=0;--k)
-	for(int k=0;k<nrays;++k)
+	int mirror_ray_count=(nrays+1)*twosides;
+	int ray_count=nrays+mirror_ray_count;
+	for(int kn=0;kn<n_count;++kn)
 	{
-		l1[0].x=-10, l1[0].y=aperture*(k+1)/(nrays+1)*0.5, l1[1].x=0, l1[1].y=l1[0].y;
-	//	lines_insert(l1[0].x, l1[0].y, l1[1].x, l1[1].y);
-		double x=0;
-		for(int k2=0;k2<count;++k2)
+		Photon *lp=lightpaths+kn;
+		int nrays0=array_size(&lp->paths);
+		if(nrays0!=ray_count)
 		{
-			ge=elements+k2;
-			x+=ge->dist;
-			if(ge->active)
+			if(lp->paths)
 			{
-				hit=refract_ray_surface(l1[0].x, l1[0].y, l1[1].x, l1[1].y, aperture, 1, n, x, ge->Rl, l2);
-				if(!hit)
+				for(int kp=0;kp<nrays0;++kp)//free array of paths
 				{
-					lines_insert(l1[0].x, l1[0].y, l1[1].x, l1[1].y);
-					break;
+					Path *p=(Path*)array_at(&lp->paths, kp);
+					array_free(&p->points);
 				}
-				lines_insert(l1[0].x, l1[0].y, l2[0].x, l2[0].y);
-				if(hit==2)
-				{
-					lines_insert(l2[0].x, l2[0].y, l2[1].x, l2[1].y);
-					break;
-				}
+				array_free(&lp->paths);
 			}
-			x+=ge->th;
-			if(ge->active)
-			{
-				hit=refract_ray_surface(l2[0].x, l2[0].y, l2[1].x, l2[1].y, aperture, n, 1, x, -ge->Rr, l1);
-				if(!hit)
-				{
-					lines_insert(l2[0].x, l2[0].y, l2[1].x, l2[1].y);
-					break;
-				}
-				lines_insert(l2[0].x, l2[0].y, l1[0].x, l1[0].y);
-				if(hit==2)
-				{
-					lines_insert(l1[0].x, l1[0].y, l1[1].x, l1[1].y);
-					break;
-				}
-			}
-		}
-		if(hit==1)
-		{
-			ray_spread[nhit]=extrapolate_y(l1[0].x, l1[0].y, l1[1].x, l1[1].y, 0);
-			if(ray_spread[nhit]>xend||l1[0].y<=l1[1].y)//if ray focuses beyond xend, or doesn't focus
-			{
-				double y=extrapolate_x(l1[0].x, l1[0].y, l1[1].x, l1[1].y, xend);
-				lines_insert(l1[0].x, l1[0].y, xend, y);
-			}
-			else
-				lines_insert(l1[0].x, l1[0].y, ray_spread[nhit], 0);
-			++nhit;
+			lp->paths=array_alloc(sizeof(Path), ray_count, ray_count, "Path lightpaths[k]::paths[ray_count]");
 		}
 	}
-	ray_spread_mean=0;
-	double variance=-1;
-	meanvar(ray_spread, nhit, &ray_spread_mean, &variance);
-	for(int k=0;k<nhit;++k)
-		ray_spread[k]-=ray_spread_mean;
-	//free(ray_spread);
-	variance=sqrt(variance);
-	if(history_enabled)
-	{
-		history[hist_idx]=variance;
-		++hist_idx, hist_idx%=w;
-	}
-	spread=variance;
-}
-void			eval3(GlassElem *elements, int count, double *ridx, int *ray_idx, int ridx_count, double aperture, double xend)
-{
-	Point l1[2], l2[2];
-	int hit;
-	GlassElem *ge;
+	ArrayHeader *ray_spread=array_alloc(sizeof(Point), 0, ray_count*n_count, "Point ray_spread[ray_count*n_count]");
+	ArrayHeader *emerge_count=array_alloc(sizeof(int), n_count, n_count, "int emerge_count[n_count]");
+	ArrayHeader *bypass_groundray=array_alloc(sizeof(int), n_count, n_count, "int bypass_groundray[n_count]");
 
-	ecount=count;
-	ray_spread=(double*)realloc(ray_spread, nrays*ridx_count*sizeof(double));
-	lines=(Line*)realloc(lines, ((count*2+2)*nrays*ridx_count)*sizeof(Line));
-	nlines=0;
-	nhit=0;
-	for(int kn=0;kn<ridx_count;++kn)
+	double xpad=100, xstart=0;
+	ground[1].x=xstart, ground[1].y=0;
+	ground[0].x=ground[1].x-xpad, ground[0].y=ground[1].y-xpad*tan_tilt;
+	for(int kn=0;kn<n_count;++kn)//for each photon				simulate glass elements
 	{
-		ray_idx[kn]=nlines;
-		//for(int kr=nrays-1;kr>=0;--kr)
-		for(int kr=0;kr<nrays;++kr)
+		double n=n_base+n_deltas[kn];
+		Photon *lp=lightpaths+kn;
+		int *n_emerged=(int*)array_at(&emerge_count, kn), *bypass_k=(int*)array_at(&bypass_groundray, kn);
+		lp->lambda=r_idx2wavelength(n);
+		lp->color=wavelength2rgb(lp->lambda);
+		for(int start=-mirror_ray_count*twosides, kr=start;kr<nrays;++kr)//for each ray/path
 		{
-			l1[0].x=-10, l1[0].y=aperture*(kr+1)/(nrays+1)*0.5, l1[1].x=0, l1[1].y=l1[0].y;
-		//	lines_insert(l1[0].x, l1[0].y, l1[1].x, l1[1].y);
-			double x=0;
-			for(int k2=0;k2<count;++k2)
+			Path *p=(Path*)array_at(&lp->paths, kr-start);
+			p->points=array_alloc(sizeof(Point), 0, ge_count*2+1, "Point lightpaths[k]::paths[ray_count]::points[ecount*2+1]");
+			double x=xstart;
+			l1[1].x=x, l1[1].y=aperture*(kr+1)/(nrays+1)*0.5;
+			l1[0].x=x-xpad, l1[0].y=l1[1].y-xpad*tan_tilt;
+			array_append(&p->points, l1);
+			for(int k2=0;k2<ge_count;++k2)//for each glass element
 			{
 				ge=elements+k2;
 				x+=ge->dist;
 				if(ge->active)
 				{
-					hit=refract_ray_surface(l1[0].x, l1[0].y, l1[1].x, l1[1].y, aperture, 1, ridx[kn], x, ge->Rl, l2);
-					if(!hit)
+					p->emerged=refract_ray_surface(l1[0].x, l1[0].y, l1[1].x, l1[1].y, aperture, 1, n, x, ge->Rl, l2);
+					if(!p->emerged)
 					{
-						lines_insert(l1[0].x, l1[0].y, l1[1].x, l1[1].y);
+						array_append(&p->points, l1+1);
 						break;
 					}
-					lines_insert(l1[0].x, l1[0].y, l2[0].x, l2[0].y);
-					if(hit==2)
+					array_append(&p->points, l2);
+					if(p->emerged==2)
 					{
-						lines_insert(l2[0].x, l2[0].y, l2[1].x, l2[1].y);
+						array_append(&p->points, l2+1);
 						break;
 					}
 				}
 				x+=ge->th;
 				if(ge->active)
 				{
-					hit=refract_ray_surface(l2[0].x, l2[0].y, l2[1].x, l2[1].y, aperture, ridx[kn], 1, x, -ge->Rr, l1);
-					if(!hit)
+					p->emerged=refract_ray_surface(l2[0].x, l2[0].y, l2[1].x, l2[1].y, aperture, n, 1, x, -ge->Rr, l1);
+					if(!p->emerged)
 					{
-						lines_insert(l2[0].x, l2[0].y, l2[1].x, l2[1].y);
+						array_append(&p->points, l2+1);
 						break;
 					}
-					lines_insert(l2[0].x, l2[0].y, l1[0].x, l1[0].y);
-					if(hit==2)
+					array_append(&p->points, l1);
+					if(p->emerged==2)
 					{
-						lines_insert(l1[0].x, l1[0].y, l1[1].x, l1[1].y);
+						array_append(&p->points, l1+1);
 						break;
 					}
 				}
 			}
-			if(hit==1)
+			if(p->emerged==1)
 			{
-				ray_spread[nhit]=extrapolate_y(l1[0].x, l1[0].y, l1[1].x, l1[1].y, 0);
-				if(ray_spread[nhit]>xend||l1[0].y<=l1[1].y)//if ray focuses beyond xend, or doesn't focus
+				Point point;
+				p->emerged=intersect_lines(ground, l1, &point);
+				if(p->emerged)
+					p->emerged=l1[0].x<point.x;
+				if(p->emerged&&point.x>xend||!p->emerged&&fabs(point.x)<1e-6)//ray is coincident with the ground
 				{
-					double y=extrapolate_x(l1[0].x, l1[0].y, l1[1].x, l1[1].y, xend);
-					lines_insert(l1[0].x, l1[0].y, xend, y);
+					p->emerged=1;
+					point.x=xend;
+					point.y=extrapolate_x(ground[0].x, ground[0].y, ground[1].x, ground[1].y, xend);
 				}
-				else
-					lines_insert(l1[0].x, l1[0].y, ray_spread[nhit], 0);
-				++nhit;
+				if(p->emerged)
+				{
+					if(twosides&&kr==-1)
+						*bypass_k=*n_emerged;
+					array_append(&p->points, &point);
+					array_append(&ray_spread, &point);
+					p->em_ray.x1=l1->x;//save last ray segment as emergence
+					p->em_ray.y1=l1->y;
+					p->em_ray.x2=point.x;
+					p->em_ray.y2=point.y;
+					++*n_emerged;
+				}
+			}
+			array_fit(&p->points);
+		}
+	}
+	Point variance_total={0};
+	Point *mean_total=ray_spread_mean+n_count;
+	mean_total->x=mean_total->y=0;
+	for(int kn=0, start=0;kn<n_count;++kn)					//find ground cross centroid
+	{
+		Point var={0}, *points=(Point*)array_at(&ray_spread, start);
+		int count=*(int*)array_at(&emerge_count, kn), bypass_idx=*(int*)array_at(&bypass_groundray, kn);
+		ray_spread_mean[kn].x=0;
+		ray_spread_mean[kn].y=0;
+		meanvar((double*)points, count, 2, &ray_spread_mean[kn].x, &var.x, bypass_idx);
+		meanvar((double*)points+1, count, 2, &ray_spread_mean[kn].y, &var.y, bypass_idx);
+		variance_total.x+=var.x;
+		variance_total.y+=var.y;
+		mean_total->x+=ray_spread_mean[kn].x;
+		mean_total->y+=ray_spread_mean[kn].y;
+		start+=count;
+	}
+	array_free(&ray_spread);
+	array_free(&emerge_count);
+	array_free(&bypass_groundray);
+	mean_total->x/=n_count;
+	mean_total->y/=n_count;
+	variance_total.x=sqrt(variance_total.x/n_count);//standard deviation
+	variance_total.y=sqrt(variance_total.y/n_count);
+	double abs_stddev=sqrt(variance_total.x*variance_total.x+variance_total.y*variance_total.y);
+
+	int n_emerged=-1;
+	Point iplane[2], iplane_combined[2];
+	total_blur=0;
+	int total_npaths=0;
+	line_make_perpendicular(ground, ray_spread_mean+n_count, iplane_combined);
+	for(int kn=0;kn<n_count;++kn)//for each photon (wavelength)			//cast rays on best image plane
+	{
+		Photon *lp=lightpaths+kn;
+		lp->em_centroid=ray_spread_mean[kn];
+		line_make_perpendicular(ground, ray_spread_mean+kn, iplane);
+
+		int npaths=array_size(&lp->paths);
+		for(int kp=0;kp<npaths;++kp)//for each path
+		{
+			Path *p=(Path*)array_at(&lp->paths, kp);
+			if(p->emerged)
+			{
+				Point cross;
+				int intersect=intersect_lines(iplane, (Point*)&p->em_ray, &cross);
+				if(intersect)
+				{
+					p->r_blur=distance(&lp->em_centroid, &cross);
+					intersect_lines(iplane_combined, (Point*)&p->em_ray, &cross);
+					total_blur+=distance(ray_spread_mean+n_count, &cross);
+					++total_npaths;
+				}
 			}
 		}
 	}
-	ray_idx[ridx_count]=nlines;
-	ray_spread_mean=0;
-	double variance=-1;
-	meanvar(ray_spread, nhit, &ray_spread_mean, &variance);
-	for(int kr=0;kr<nhit;++kr)
-		ray_spread[kr]-=ray_spread_mean;
-	//free(ray_spread);
-	variance=sqrt(variance);//standard deviation
+	if(total_npaths)
+		total_blur/=total_npaths;
+
 	if(history_enabled)
 	{
-		history[hist_idx]=variance;
+		history[hist_idx]=abs_stddev;
 		++hist_idx, hist_idx%=w;
 	}
-	spread=variance;
+	return abs_stddev;
 }
-#ifdef WAVELENGTH_IS_VARIABLE
-	#define	EVAL()	eval2(elements, ecount, n_float, ap, 300)
-#else
-	#define	EVAL()	eval3(elements, ecount, r_idx, ray_idx, ridx_count, ap, 300)
-#endif
-//	#define	EVAL()	spread=eval(ap, nrays, n_float, R1, t1, xdist, R2a, t2, R2b, xCCD, xCut)
+#define	EVAL()	spread=eval(elements, ecount, nrays, n_base, n_deltas, n_count, ap, 300, tan_tilt)
 double			calc_loss()
 {
-	double focal_length=100;
-	focal_length-=ray_spread_mean;
-	return spread+focal_length*focal_length;
+	return spread;
+
+	//double focal_length=100;
+	//focal_length-=ray_spread_mean[n_count>>1];
+	//return spread+focal_length*focal_length;
 }
 void			change_diopter(double *r, double delta)
 {
@@ -697,45 +785,57 @@ void			change_diopter(double *r, double delta)
 	else
 		*r=1/delta;
 }
+void			change_var(GlassElem *ge, int idx, double delta)
+{
+	switch(idx)
+	{
+	case 0:case 2:
+		ge->vars[idx]+=delta;
+		break;
+	case 1:case 3:
+		change_diopter(ge->vars+idx, delta);
+		break;
+	}
+}
 void			calc_grad(double *grad, double step, int *var_idx, int nvars)
 {
 	history_enabled=0;
-	memset(grad, 0, ecount*4*sizeof(double));
-	for(int ke=1;ke<ecount;++ke)//exclude first glass element
+	memset(grad, 0, ecount*nvars*sizeof(double));
+	for(int ke=0;ke<ecount;++ke)//exclude first glass element
 	{
 		GlassElem *ge=elements+ke;
 		if(ge->active)
 		{
 			for(int kv=0;kv<nvars;++kv)
 			{
-				ge->vars[var_idx[kv]]+=step;
+				change_var(ge, var_idx[kv], step);
 				EVAL();
-				ge->vars[var_idx[kv]]-=step;
-				grad[nvars*ke+var_idx[kv]]=calc_loss();
+				change_var(ge, var_idx[kv], -step);
+				grad[nvars*ke+kv]=calc_loss();
 			}
 		}
 	}
 	EVAL();
 	double loss=calc_loss();
-	for(int ke=1;ke<ecount;++ke)
+	for(int ke=0;ke<ecount;++ke)
 	{
 		if(elements[ke].active)
 		{
 			for(int kv=0;kv<nvars;++kv)
-				grad[var_idx[kv]]-=loss;
+				grad[nvars*ke+kv]-=loss;
 		}
 	}
 	history_enabled=1;
 }
 void			update_params(double *grad, int *var_idx, int nvars)
 {
-	for(int ke=1;ke<ecount;++ke)//bypass first lens
+	for(int ke=0;ke<ecount;++ke)//bypass first lens
 	{
 		GlassElem *ge=elements+ke;
 		if(ge->active)
 		{
 			for(int kv=0;kv<nvars;++kv)
-				ge->vars[var_idx[kv]]+=grad[ecount*ke+var_idx[kv]];
+				change_var(ge, var_idx[kv], grad[nvars*ke+kv]);
 		}
 	}
 }
@@ -771,21 +871,25 @@ void			function1()
 	else
 		calculate_scale(DX*h/(w*AR_Y), h, &Ystep);
 }
-#define			real2screenX(XCOMP)	(int)floor(((XCOMP)-Xstart)*Xr)
-#define			real2screenY(YCOMP)	(int)floor((Yend-(YCOMP))*Yr)
-void			draw_line(double x1, double y1, double x2, double y2, double Xstart, double Xr, double Yend, double Yr)
+typedef struct ScaleConverterStruct
 {
-	MoveToEx(ghMemDC, real2screenX(x1), real2screenY(y1), 0);
-	LineTo(ghMemDC, real2screenX(x2), real2screenY(y2));
+	double Xstart, Xr, Yend, Yr;
+} ScaleConverter;
+#define			real2screenX(XCOMP, SCALE)	(int)floor(((XCOMP)-SCALE->Xstart)*SCALE->Xr)
+#define			real2screenY(YCOMP, SCALE)	(int)floor((SCALE->Yend-(YCOMP))*SCALE->Yr)
+void			draw_line(double x1, double y1, double x2, double y2, ScaleConverter *scale)
+{
+	MoveToEx(ghMemDC, real2screenX(x1, scale), real2screenY(y1, scale), 0);
+	LineTo(ghMemDC, real2screenX(x2, scale), real2screenY(y2, scale));
 }
-double			draw_arc(double x, double R, double ap, double Xstart, double Xr, double Yend, double Yr, int nsegments)//returns top x
+double			draw_arc(double x, double R, double ap, ScaleConverter *scale, int nsegments)//returns top x
 {
 	double r2=R*R;
 	int x1, y1, x2, y2;
 	if(!R)
 	{
-		x1=real2screenX(x);
-		y1=real2screenY(-ap*0.5), y2=real2screenY(ap*0.5);
+		x1=real2screenX(x, scale);
+		y1=real2screenY(-ap*0.5, scale), y2=real2screenY(ap*0.5, scale);
 		MoveToEx(ghMemDC, x1, y1, 0);
 		LineTo(ghMemDC, x1, y2);
 		return x;
@@ -794,7 +898,7 @@ double			draw_arc(double x, double R, double ap, double Xstart, double Xr, doubl
 	for(int k=-nsegments;k<=nsegments;++k)
 	{
 		ty=ap*k/nsegments*0.5, tx=x+R-sgn_star(R)*sqrt(r2-ty*ty);
-		x2=real2screenX(tx), y2=real2screenY(ty);
+		x2=real2screenX(tx, scale), y2=real2screenY(ty, scale);
 		if(k>-nsegments)
 		{
 			MoveToEx(ghMemDC, x1, y1, 0);
@@ -838,16 +942,24 @@ int				wavelength2rgb(double lambda)
 	return b<<16|g<<8|r;//OpenGL & WinAPI
 //	return r<<16|g<<8|b;//DIB
 }//*/
+void			draw_curve(Point *points, int npoints, ScaleConverter *scale)
+{
+	for(int k=0;k<npoints-1;++k)
+	{
+		MoveToEx(ghMemDC, real2screenX(points[k].x, scale), real2screenY(points[k].y, scale), 0);
+		LineTo(ghMemDC, real2screenX(points[k+1].x, scale), real2screenY(points[k+1].y, scale));
+	}
+}
 void			render()
 {
 	memset(rgb, 0xFF, rgbn*sizeof(int));
 	
-	//Rectangle(ghMemDC, rand()%R.right, rand()%R.bottom, rand()%R.right, rand()%R.bottom);
-	double DY=DX*h/(w*AR_Y);
 	if(h)
 	{
+		double DY=DX*h/(w*AR_Y);
 		double Xr=w/DX, Yr=h/DY;//unity in pixels
 		double Ystart=VY-DY/2, Yend=VY+DY/2, Xstart=VX-DX/2, Xend=VX+DX/2;
+		ScaleConverter sc={Xstart, Xr, Yend, Yr}, *scale=&sc;
 		if(!clearScreen)
 		{
 			hPen=(HPEN)SelectObject(ghMemDC, hPen), hBrush=(HBRUSH)SelectObject(ghMemDC, hBrush);
@@ -856,43 +968,29 @@ void			render()
 			{
 				for(double x=floor(Xstart/Xstepx2)*Xstepx2, xEnd=ceil (Xend/Xstep)*Xstep;x<xEnd;x+=Xstepx2)
 				{
-					double
-						ax1=(x		-Xstart)*Xr, ay1=(Yend-y		)*Yr, ax2=(x+Xstep	-Xstart)*Xr, ay2=(Yend-y-Ystep	)*Yr,
-						bx1=(x+Xstep-Xstart)*Xr, by1=(Yend-y-Ystep	)*Yr, bx2=(x+Xstepx2-Xstart)*Xr, by2=(Yend-y-Ystepx2)*Yr;
-					Rectangle(ghMemDC, (int)(ax1)-(ax1<0), (int)(ay1)-(ay1<0)+1, (int)(ax2)-(ax2<0), (int)(ay2)-(ay2<0)+1);
-					Rectangle(ghMemDC, (int)(bx1)-(bx1<0), (int)(by1)-(by1<0)+1, (int)(bx2)-(bx2<0), (int)(by2)-(by2<0)+1);
+					int x1=real2screenX(x, scale), x2=real2screenX(x+Xstep, scale), x3=real2screenX(x+Xstepx2, scale),
+						y1=real2screenY(y, scale), y2=real2screenY(y+Ystep, scale), y3=real2screenY(y+Ystepx2, scale);
+					Rectangle(ghMemDC, x1, y1, x2, y2);
+					Rectangle(ghMemDC, x2, y2, x3, y3);
 				}
 			}
 			hPen=(HPEN)SelectObject(ghMemDC, hPen), hBrush=(HBRUSH)SelectObject(ghMemDC, hBrush);
 		}
-#ifdef WAVELENGTH_IS_VARIABLE
-		HPEN hPenRay=CreatePen(PS_SOLID, 1, wavelength2rgb(lambda));
-		hPenRay=(HPEN)SelectObject(ghMemDC, hPenRay);
-		for(int kl=0;kl<nlines;++kl)
+		for(int kn=0;kn<n_count;++kn)//draw light paths
 		{
-			Line *ln=lines+kl;
-			MoveToEx(ghMemDC, real2screenX(ln->x1), real2screenY(ln->y1), 0);
-			LineTo(ghMemDC, real2screenX(ln->x2), real2screenY(ln->y2));
-		}
-		hPenRay=(HPEN)SelectObject(ghMemDC, hPenRay);
-		DeleteObject(hPenRay);
-#else
-		for(int kv=0;kv<ridx_count;++kv)
-		{
-			double wavelength=r_idx2wavelength(r_idx[kv]);
-			int color=wavelength2rgb(wavelength);
-			HPEN hPenRay=CreatePen(PS_SOLID, 1, color);
+			Photon *lp=lightpaths+kn;
+			HPEN hPenRay=CreatePen(PS_SOLID, 1, lp->color);
 			hPenRay=(HPEN)SelectObject(ghMemDC, hPenRay);
-			for(int kl=ray_idx[kv];kl<ray_idx[kv+1];++kl)
+			for(int kp=0, npaths=array_size(&lp->paths);kp<npaths;++kp)
 			{
-				Line *ln=lines+kl;
-				MoveToEx(ghMemDC, real2screenX(ln->x1), real2screenY(ln->y1), 0);
-				LineTo(ghMemDC, real2screenX(ln->x2), real2screenY(ln->y2));
+				Path *p=(Path*)array_at(&lp->paths, kp);
+				Point *points=(Point*)array_at(&p->points, 0);
+				int npoints=array_size(&p->points);
+				draw_curve(points, npoints, scale);
 			}
 			hPenRay=(HPEN)SelectObject(ghMemDC, hPenRay);
 			DeleteObject(hPenRay);
 		}
-#endif
 
 		hPenLens=(HPEN)SelectObject(ghMemDC, hPenLens);
 		int segments=25;
@@ -902,48 +1000,64 @@ void			render()
 			GlassElem *ge=elements+k;
 			x+=ge->dist;
 			if(ge->active)
-				topx1=draw_arc(x, ge->Rl, ap, Xstart, Xr, Yend, Yr, segments);
+				topx1=draw_arc(x, ge->Rl, ap, scale, segments);
 			x+=ge->th;
 			if(ge->active)
 			{
-				topx2=draw_arc(x, -ge->Rr, ap, Xstart, Xr, Yend, Yr, segments);
-				draw_line(topx1, yreach, topx2, yreach, Xstart, Xr, Yend, Yr);
-				draw_line(topx1, -yreach, topx2, -yreach, Xstart, Xr, Yend, Yr);
+				topx2=draw_arc(x, -ge->Rr, ap, scale, segments);
+				draw_line(topx1, yreach, topx2, yreach, scale);
+				draw_line(topx1, -yreach, topx2, -yreach, scale);
 			}
 		}
-	/*	double topx1, topx2, yreach=ap*0.5;
-		topx1=draw_arc(x, R1,		ap, Xstart, Xr, Yend, Yr, segments);
-		x+=t1;
-		topx2=draw_arc(x, 0,		ap, Xstart, Xr, Yend, Yr, segments);
-		draw_line(topx1, yreach, topx2, yreach, Xstart, Xr, Yend, Yr);
-		draw_line(topx1, -yreach, topx2, -yreach, Xstart, Xr, Yend, Yr);
-
-		if(correctorOn)
-		{
-			x+=xdist;
-			topx1=draw_arc(x, R2a,	ap, Xstart, Xr, Yend, Yr, segments);
-			x+=t2;
-			topx2=draw_arc(x, -R2b,	ap, Xstart, Xr, Yend, Yr, segments);
-			draw_line(topx1, yreach, topx2, yreach, Xstart, Xr, Yend, Yr);
-			draw_line(topx1, -yreach, topx2, -yreach, Xstart, Xr, Yend, Yr);
-		}//*/
 		hPenLens=(HPEN)SelectObject(ghMemDC, hPenLens);
+		
+		hBrushHollow=(HBRUSH)SelectObject(ghMemDC, hBrushHollow);
+		for(int kn=0;kn<n_count;++kn)				//draw blur circles
+		{
+			Photon *lp=lightpaths+kn;
+			int npaths=array_size(&lp->paths);
+			int xcenter=real2screenX(lp->em_centroid.x, scale),
+				ycenter=real2screenY(lp->em_centroid.y, scale);
 
-		if(ray_spread)//draw spread
+			HPEN tempPen=(HPEN)CreatePen(PS_SOLID, 1, lp->color);
+			tempPen=(HPEN)SelectObject(ghMemDC, tempPen);
+			for(int kp=0;kp<npaths;++kp)
+			{
+				Path *p=(Path*)array_at(&lp->paths, kp);
+				if(p->emerged)
+				{
+					int rx=(int)(p->r_blur*Xr), ry=(int)(p->r_blur*Yr);
+					Ellipse(ghMemDC, xcenter-rx, ycenter-ry, xcenter+rx, ycenter+ry);
+				}
+			}
+			tempPen=(HPEN)SelectObject(ghMemDC, tempPen);
+			DeleteObject(tempPen);
+		}
+		{
+			int xcenter=real2screenX(ray_spread_mean[n_count].x, scale),
+				ycenter=real2screenY(ray_spread_mean[n_count].y, scale);
+			int rx=(int)(total_blur*Xr), ry=(int)(total_blur*Yr);
+			Ellipse(ghMemDC, xcenter-rx, ycenter-ry, xcenter+rx, ycenter+ry);
+		}
+		hBrushHollow=(HBRUSH)SelectObject(ghMemDC, hBrushHollow);
+	/*	if(ray_spread)//draw spread
 		{
 			hBrushHollow=(HBRUSH)SelectObject(ghMemDC, hBrushHollow);
-			int xcenter=real2screenX(ray_spread_mean), ycenter=real2screenY(0);
-			for(int k=0;k<nrays;++k)
+			for(int kn=0;kn<n_count;++kn)
 			{
-				int r=(int)(ray_spread[k]*Xr);
-				HPEN tempPen=(HPEN)CreatePen(PS_SOLID, 1, osc_color(k, nrays));
-				tempPen=(HPEN)SelectObject(ghMemDC, tempPen);
-				Ellipse(ghMemDC, xcenter-r, ycenter-r, xcenter+r, ycenter+r);
-				tempPen=(HPEN)SelectObject(ghMemDC, tempPen);
-				DeleteObject(tempPen);
+				int xcenter=real2screenX(ray_spread_mean[kn].x, pscale), ycenter=real2screenY(ray_spread_mean[kn].y, pscale);
+				for(int k=0;k<nrays;++k)
+				{
+					int r=(int)(ray_spread[k]*Xr);
+					HPEN tempPen=(HPEN)CreatePen(PS_SOLID, 1, osc_color(k, nrays));
+					tempPen=(HPEN)SelectObject(ghMemDC, tempPen);
+					Ellipse(ghMemDC, xcenter-r, ycenter-r, xcenter+r, ycenter+r);
+					tempPen=(HPEN)SelectObject(ghMemDC, tempPen);
+					DeleteObject(tempPen);
+				}
 			}
 			hBrushHollow=(HBRUSH)SelectObject(ghMemDC, hBrushHollow);
-		}
+		}//*/
 
 		if(!clearScreen)
 		{
@@ -989,6 +1103,7 @@ void			render()
 			SetBkMode(ghMemDC, bkMode);
 
 			int y=0;
+			GUITPrint(ghMemDC, 0, y, 0, "Shift +/-\t\ttilt"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "Crtl +/-\t\tchange wavelength"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "T\t\tcenter at focus"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "tab\t\tselect glass element"), y+=16;
@@ -1000,14 +1115,12 @@ void			render()
 			GUITPrint(ghMemDC, 0, y, 0, "F\t\tflip glass element"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "O\t\toptimize"), y+=32;
 
-			GUITPrint(ghMemDC, 0, y, 0, "\t1 dist\t2 Rl\t3 Th\t4 Rr"), y+=16;
+			GUITPrint(ghMemDC, 0, y, 0, "\t\t1 dist\t2 Rl\t3 Th\t4 Rr"), y+=16;
 			for(int k=0;k<ecount;++k)
-				GUITPrint(ghMemDC, 0, y, 0, "%c%c: %c\t%g\t%g\t%g\t%g\t%s", current_elem==k?'>':' ', 'A'+k, elements[k].active?'V':'X', elements[k].dist, elements[k].Rl, elements[k].th, elements[k].Rr, current_elem==k?"<-":""), y+=16;
-#ifdef WAVELENGTH_IS_VARIABLE
-			GUIPrint(ghMemDC, w>>3, h*3>>2, "wavelength %gnm, n %g, F %gcm, Std.Dev %lf mm", lambda, n_float, ray_spread_mean, 10*spread);
-#else
-			GUIPrint(ghMemDC, w>>3, h*3>>2, "F %lfcm, Std.Dev %g mm", ray_spread_mean, 10*spread);
-#endif
+				GUITPrint(ghMemDC, 0, y, 0, "%s  %c: %c\t%g\t%g\t%g\t%g\t%s", current_elem==k?"->":" ", 'A'+k, elements[k].active?'V':'X', elements[k].dist, elements[k].Rl, elements[k].th, elements[k].Rr, current_elem==k?"<-":""), y+=16;
+			Point *point=ray_spread_mean+n_count;
+			double focus=sqrt(point->x*point->x+point->y*point->y);
+			GUIPrint(ghMemDC, w>>3, h*3>>2, "wavelength %gnm, n %g, F %gcm, Std.Dev %lfmm", lambda, n_base, focus, 10*spread);
 
 		/*	GUIPrint(ghMemDC, 0, y, "Space: Toggle corrector"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "1: R2a\t%lf (Ctrl 1 To negate)", R2a), y+=16;
@@ -1030,8 +1143,6 @@ void			render()
 	
 	QueryPerformanceCounter(&li);
 	GUIPrint(ghMemDC, 0, h-16, "fps=%.10f, T=%.10fms", freq/(double)(li.QuadPart-nticks), 1000.*(li.QuadPart-nticks)/freq);
-//	linelen=sprintf_s(line, 128, "fps=%.10f, T=%.10fms", freq/double(li.QuadPart-nticks), 1000.*(li.QuadPart-nticks)/freq);
-//	if(linelen>0)TextOutA(ghMemDC, 0, h-16, line, linelen);
 	nticks=li.QuadPart;
 	BitBlt(ghDC, 0, 0, w, h, ghMemDC, 0, 0, SRCCOPY);
 }
@@ -1162,30 +1273,34 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			}
 			if(kb[VK_ADD		]||kb[VK_RETURN	]||kb[VK_OEM_PLUS	])
 			{
-#ifdef WAVELENGTH_IS_VARIABLE
 				if(kb[VK_CONTROL])
 				{
 					if(lambda<750)
-						lambda+=1, n_float=wavelength2refractive_index(lambda), e=1;
+						lambda+=1, n_base=wavelength2refractive_index(lambda), e=1;
 				}
-				else
-#endif
-				if(kb['X'])	DX/=1.05, AR_Y/=1.05;
+				else if(kb[VK_SHIFT])
+				{
+					if(tan_tilt<0.7071)
+						tan_tilt+=0.00005*DX, e=1;
+				}
+				else if(kb['X'])	DX/=1.05, AR_Y/=1.05;
 				else if(kb['Y'])	AR_Y*=1.05;
 				else				DX/=1.05;
 				function1();
 			}
 			if(kb[VK_SUBTRACT	]||kb[VK_BACK	]||kb[VK_OEM_MINUS	])
 			{
-#ifdef WAVELENGTH_IS_VARIABLE
 				if(kb[VK_CONTROL])
 				{
 					if(lambda>380)
-						lambda-=1, n_float=wavelength2refractive_index(lambda), e=1;
+						lambda-=1, n_base=wavelength2refractive_index(lambda), e=1;
 				}
-				else
-#endif
-				if(kb['X'])	DX*=1.05, AR_Y*=1.05;
+				else if(kb[VK_SHIFT])
+				{
+					if(tan_tilt>-0.7071)
+						tan_tilt-=0.00005*DX, e=1;
+				}
+				else if(kb['X'])	DX*=1.05, AR_Y*=1.05;
 				else if(kb['Y'])	AR_Y/=1.05;
 				else				DX*=1.05;
 				function1();
@@ -1209,7 +1324,8 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				if(_2d_drag_graph_not_window)
 					dx=-dx, dy=-dy;
 				VX+=dx*DX/w, VY+=dy*DX/(w*AR_Y);
-				InvalidateRect(ghWnd, 0, 0);
+				if(!timer)
+					InvalidateRect(ghWnd, 0, 0);
 				SetCursorPos(centerP.x, centerP.y);//moves mouse
 			}
 			m_bypass=!m_bypass;
@@ -1285,7 +1401,6 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			break;
 		case VK_SPACE:
 			elements[current_elem].active=!elements[current_elem].active;
-		//	correctorOn=!correctorOn;
 			EVAL();
 			break;
 		case VK_TAB:
@@ -1293,15 +1408,22 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			break;
 		case 'O'://optimize
 			{
-				double grad[16];
-				static double velocity[16]={0};
-				int var_idx[]={1, 3};//only optimize left & right radii
+				static double *grad=0, *velocity=0;
+				int var_idx[]={0, 1, 2, 3};
 				int nvars=SIZEOF(var_idx);
-				calc_grad(grad, 0.01, var_idx, nvars);
+				if(!grad)
+				{
+					int bytesize=ecount*nvars*sizeof(double);
+					grad	=(double*)malloc(bytesize);
+					velocity=(double*)malloc(bytesize);
+					memset(velocity, 0, bytesize);
+				}
+				calc_grad(grad, 0.001, var_idx, nvars);
+				double gain=0.0000001*DX;
 				for(int k=0;k<16;++k)
 				{
 					if(grad[k])
-						velocity[k]=velocity[k]*0.5-0.0001*grad[k];
+						velocity[k]=velocity[k]*0.5-gain*grad[k];
 				}
 				update_params(velocity, var_idx, nvars);
 				EVAL();
@@ -1337,7 +1459,12 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			}
 			break;
 		case 'T':
-			VX=ray_spread_mean, VY=0;
+			VX=ray_spread_mean[n_count].x;
+			VY=ray_spread_mean[n_count].y;
+			break;
+		case 'M':
+			twosides=!twosides;
+			EVAL();
 			break;
 		case 'F':
 			{
@@ -1356,14 +1483,17 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				if(kb[VK_SHIFT])
 				{
 					e=1;
-					for(int k=1;k<ecount;++k)//exclude first element
-					{
-						GlassElem *ge=elements+k;
-						ge->dist=k?4:0;
-						ge->Rl=100;
-						ge->th=0.8;
-						ge->Rr=100;
-					}
+					tan_tilt=0;
+					lambda=lambda0;
+					memcpy(elements, ebackup, ecount*sizeof(GlassElem));
+					//for(int k=1;k<ecount;++k)//exclude first element
+					//{
+					//	GlassElem *ge=elements+k;
+					//	ge->dist=k?4:0;
+					//	ge->Rl=100;
+					//	ge->th=0.8;
+					//	ge->Rr=100;
+					//}
 				}
 				else if(kb['1'])
 					e=1, elements[current_elem].dist=current_elem?4:0;
@@ -1434,10 +1564,15 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 }
 int __stdcall	WinMain(HINSTANCE hInstance, HINSTANCE hPrev, char *cmdargs, int nCmdShow)
 {
+	ebackup=(GlassElem*)malloc(ecount*sizeof(GlassElem));
+	memcpy(ebackup, elements, ecount*sizeof(GlassElem));
+	lambda0=lambda;
+
 	hPen=CreatePen(PS_SOLID, 1, _2dCheckColor);
 	hBrush=CreateSolidBrush(_2dCheckColor);
 	hPenLens=CreatePen(PS_SOLID, 1, 0x00FF00FF);
 	hBrushHollow=(HBRUSH)GetStockObject(NULL_BRUSH);
+
 	WNDCLASSEXA wndClassEx=
 	{
 		sizeof(WNDCLASSEXA), CS_HREDRAW|CS_VREDRAW|CS_DBLCLKS,
