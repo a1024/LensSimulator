@@ -20,6 +20,9 @@
 #define	_USE_MATH_DEFINES
 #include<math.h>
 #include<Windows.h>
+
+	#define		DEBUG_INFO_STR
+
 #define			SIZEOF(ST_ARR)	(sizeof(ST_ARR)/sizeof(*(ST_ARR)))
 #define			G_BUF_SIZE	2048
 char			g_buf[G_BUF_SIZE]={0};
@@ -71,13 +74,74 @@ int				mod(int x, int n)
 	return x;
 }
 
+void			memfill(void *dst, const void *src, size_t dstbytes, size_t srcbytes)
+{
+	unsigned copied;
+	char *d=(char*)dst;
+	const char *s=(const char*)src;
+	if(dstbytes<srcbytes)
+	{
+		memcpy(dst, src, dstbytes);
+		return;
+	}
+	copied=srcbytes;
+	memcpy(d, s, copied);
+	while(copied<<1<=dstbytes)
+	{
+		memcpy(d+copied, d, copied);
+		copied<<=1;
+	}
+	if(copied<dstbytes)
+		memcpy(d+copied, d, dstbytes-copied);
+}
+char			error_msg[G_BUF_SIZE]={0};
+int				runtime_error(const char *file, int line, const char *format, ...)
+{
+	va_list args;
+	sprintf_s(error_msg, G_BUF_SIZE, "%s(%d) ERROR\n", file, line);
+	if(format)
+	{
+		va_start(args, format);
+		vsprintf_s(error_msg, G_BUF_SIZE, format, args);
+		va_end(args);
+		printf("\n");
+	}
+	//pause();
+	return 0;
+}
+int				valid(const void *p)
+{
+	switch((size_t)p)
+	{
+	case 0:
+	case 0xCCCCCCCC:
+	case 0xFEEEFEEE:
+	case 0xEEFEEEFE:
+	case 0xCDCDCDCD:
+	case 0xFDFDFDFD:
+	case 0xBAAD0000:
+		return 0;
+	}
+	return 1;
+}
+#define			LOG_ERROR(FORMAT, ...)		runtime_error(__FILE__, __LINE__, FORMAT, ##__VA_ARGS__)
+#define			ASSERT(SUCCESS)				((SUCCESS)!=0||runtime_error(__FILE__, __LINE__, #SUCCESS))
+#define			ASSERT_P(POINTER)			(valid(POINTER)||runtime_error(__FILE__, __LINE__, #POINTER " == 0"))
+
+#ifdef DEBUG_INFO_STR
+typedef const char *DebugInfo;
+#else
+typedef size_t DebugInfo;
+#endif
 typedef struct ArrayHeaderStruct
 {
 	size_t count, esize, cap;//cap is in bytes
-	const char *debug_name;
+	DebugInfo debug_info;
 	union
 	{
 		unsigned char data[];
+
+		char str[];
 	//	char i8data[];
 	//	unsigned short u16data[];
 	//	short i16data[];
@@ -88,132 +152,190 @@ typedef struct ArrayHeaderStruct
 	//	float f32data[];
 		double fdata[];
 	};
-} ArrayHeader;
-void			array_free(ArrayHeader **pa)
-{
-	free(*pa);
-	*pa=0;
-}
-void			array_clear(ArrayHeader **pa)
-{
-	ArrayHeader **p=(ArrayHeader**)pa;
-	p[0]->count=0;
-}
-ArrayHeader*	array_alloc(size_t esize, size_t count, size_t reserve, const char *debug_name)
-{
-	size_t size, cap;
-	ArrayHeader *p;
+} ArrayHeader, *ArrayHandle;
+ArrayHandle		array_construct(const void *src, size_t esize, size_t count, size_t rep, size_t pad, DebugInfo debug_info);
+ArrayHandle		array_copy(ArrayHandle *arr, DebugInfo debug_info);//shallow
+void			array_free(ArrayHandle *arr);
+void			array_clear(ArrayHandle *arr);//keeps allocation
+void			array_fit(ArrayHandle *arr, size_t pad);
 
-	if(reserve<count)
-		reserve=count;
-	size=reserve*esize, cap=esize;
-	for(;cap<size;cap<<=1);
-	p=(ArrayHeader*)malloc(sizeof(ArrayHeader)+cap);
-	p->count=count;
-	p->esize=esize;
-	p->cap=cap;
-	p->debug_name=debug_name;
-	memset(p->data, 0, cap);
-	return p;
-}
-void			array_realloc(ArrayHeader **pa, size_t count)
+void*			array_insert(ArrayHandle *arr, size_t idx, void *data, size_t count, size_t rep, size_t pad);//cannot be nullptr
+
+size_t			array_size(ArrayHandle const *arr);
+void*			array_at(ArrayHandle *arr, size_t idx);
+const void*		array_at_const(ArrayHandle const *arr, int idx);
+void*			array_back(ArrayHandle *arr);
+const void*		array_back_const(ArrayHandle const *arr);
+
+#ifdef DEBUG_INFO_STR
+#define			ARRAY_ALLOC(ELEM_TYPE, NAME, COUNT, PAD, DEBUG_INFO)	NAME=array_construct(0, sizeof(ELEM_TYPE), COUNT, 1, PAD, DEBUG_INFO)
+#else
+#define			ARRAY_ALLOC(ELEM_TYPE, NAME, COUNT, PAD)	NAME=array_construct(0, sizeof(ELEM_TYPE), COUNT, 1, PAD, __LINE__)
+#endif
+#define			ARRAY_APPEND(ARR, DATA, COUNT, REP, PAD)	array_insert(&(ARR), array_size(&(ARR)), DATA, COUNT, REP, PAD)
+#define			ARRAY_DATA(ARR)			(ARR)->data
+#define			ARRAY_I(ARR, IDX)		*(int*)array_at(&ARR, IDX)
+#define			ARRAY_U(ARR, IDX)		*(unsigned*)array_at(&ARR, IDX)
+#define			ARRAY_F(ARR, IDX)		*(double*)array_at(&ARR, IDX)
+
+
+//String API (null terminated array)
+#ifdef DEBUG_INFO_STR
+#define			ESTR_ALLOC(TYPE, STR, LEN, DEBUG_INFO)				STR=array_construct(0, sizeof(TYPE), 0, 1, LEN+1, DEBUG_INFO)
+#define			ESTR_COPY(TYPE, STR, SRC, LEN, REP, DEBUG_INFO)		STR=array_construct(SRC, sizeof(TYPE), LEN, REP, 1, DEBUG_INFO)
+#else
+#define			ESTR_ALLOC(TYPE, STR, LEN)				STR=array_construct(0, sizeof(TYPE), 0, 1, LEN+1, __LINE__)
+#define			ESTR_COPY(TYPE, STR, SRC, LEN, REP)		STR=array_construct(SRC, sizeof(TYPE), LEN, REP, 1, __LINE__)
+#endif
+#define			STR_APPEND(STR, SRC, LEN, REP)			array_insert(&(STR), array_size(&(STR)), SRC, LEN, REP, 1)
+#define			STR_FIT(STR)							array_fit(&STR, 1)
+#define			ESTR_AT(TYPE, STR, IDX)					*(TYPE*)array_at(&(STR), IDX)
+
+#define			STR_ALLOC(STR, LEN, ...)				ESTR_ALLOC(char, STR, LEN, ##__VA_ARGS__)
+#define			STR_COPY(STR, SRC, LEN, REP, ...)		ESTR_COPY(char, STR, SRC, LEN, REP, ##__VA_ARGS__)
+#define			STR_AT(STR, IDX)						ESTR_AT(char, STR, IDX)
+
+#define			WSTR_ALLOC(STR, LEN, ...)				ESTR_ALLOC(wchar_t, STR, LEN, ##__VA_ARGS__)
+#define			WSTR_COPY(STR, SRC, LEN, REP, ...)		ESTR_COPY(wchar_t, STR, SRC, LEN, REP, ##__VA_ARGS__)
+#define			WSTR_AT(STR, IDX)						ESTR_AT(wchar_t, STR, IDX)
+
+//private
+static void		array_realloc(ArrayHandle *arr, size_t count, size_t pad)//CANNOT be nullptr, array must be initialized with array_alloc()
 {
-	ArrayHeader **p=(ArrayHeader**)pa, *p2;
-	size_t size=count*p[0]->esize, newcap=p[0]->esize;
+	ArrayHandle p2;
+	size_t size, newcap;
+
+	ASSERT_P(*arr);
+	size=(count+pad)*arr[0]->esize, newcap=arr[0]->esize;
 	for(;newcap<size;newcap<<=1);
-	if(newcap>p[0]->cap)
+	if(newcap>arr[0]->cap)
 	{
-		p2=(ArrayHeader*)realloc(*p, newcap);
-		if(!p2);//TODO: log error
-		*p=p2;
-		if(p[0]->cap<newcap)
-			memset(p[0]->data+p[0]->cap, 0, newcap-p[0]->cap);
-		p[0]->cap=newcap;
+		p2=(ArrayHandle)realloc(*arr, sizeof(ArrayHeader)+newcap);
+		ASSERT_P(p2);
+		*arr=p2;
+		if(arr[0]->cap<newcap)
+			memset(arr[0]->data+arr[0]->cap, 0, newcap-arr[0]->cap);
+		arr[0]->cap=newcap;
 	}
-	p[0]->count=count;
+	arr[0]->count=count;
 }
-void*			array_append(ArrayHeader **pa, void *val)
+
+//Array API
+ArrayHandle		array_construct(const void *src, size_t esize, size_t count, size_t rep, size_t pad, DebugInfo debug_info)
 {
-	ArrayHeader **p=(ArrayHeader**)pa;
-	size_t offset=p[0]->count*p[0]->esize;
-	array_realloc(pa, p[0]->count+1);
-	if(val)
-		memcpy(p[0]->data+offset, val, p[0]->esize);
-	return p[0]->data+offset;
+	ArrayHandle arr;
+	size_t srcsize, dstsize, cap;
+	
+	srcsize=count*esize;
+	dstsize=rep*srcsize;
+	for(cap=esize+pad*esize;cap<dstsize;cap<<=1);
+	arr=(ArrayHandle)malloc(sizeof(ArrayHeader)+cap);
+	ASSERT_P(arr);
+	arr->count=count;
+	arr->esize=esize;
+	arr->cap=cap;
+	arr->debug_info=debug_info;
+	if(src)
+	{
+		ASSERT_P(src);
+		memfill(arr->data, src, dstsize, srcsize);
+	}
+	if(cap-dstsize>0)
+		memset(arr->data+dstsize, 0, cap-dstsize);
+	return arr;
 }
-void*			array_insert(ArrayHeader **pa, size_t idx, void *data, size_t count)
+ArrayHandle		array_copy(ArrayHandle *arr, DebugInfo debug_info)
 {
-	ArrayHeader **p=(ArrayHeader**)pa;
-	size_t o_src=idx*p[0]->esize, newsize=count*p[0]->esize, o_dst=o_src+newsize, move_size=p[0]->count*p[0]->esize-o_src;
-	array_realloc(pa, p[0]->count+count);
-	memmove(p[0]->data+o_dst, p[0]->data+o_src, move_size);
+	ArrayHandle a2;
+	size_t bytesize;
+
+	if(!*arr)
+		return 0;
+	bytesize=sizeof(ArrayHeader)+arr[0]->cap;
+	a2=(ArrayHandle)malloc(bytesize);
+	ASSERT_P(a2);
+	memcpy(a2, *arr, bytesize);
+	a2->debug_info=debug_info;
+	return a2;
+}
+void			array_free(ArrayHandle *arr)//can be nullptr
+{
+	free(*arr);
+	*arr=0;
+}
+void			array_clear(ArrayHandle *arr)//can be nullptr
+{
+	if(*arr)
+		arr[0]->count=0;
+}
+void*			array_insert(ArrayHandle *arr, size_t idx, void *data, size_t count, size_t rep, size_t pad)
+{
+	size_t start, srcsize, dstsize, movesize;
+	
+	ASSERT_P(*arr);
+	start=idx*arr[0]->esize;
+	srcsize=count*arr[0]->esize;
+	dstsize=rep*srcsize;
+	movesize=arr[0]->count*arr[0]->esize-start;
+	array_realloc(arr, arr[0]->count+rep*count, pad);
+	memmove(arr[0]->data+start+dstsize, arr[0]->data+start, movesize);
 	if(data)
-		memcpy(p[0]->data+o_src, data, newsize);
-	return p[0]->data+o_src;
+		memfill(arr[0]->data+start, data, dstsize, srcsize);
+	else
+		memset(arr[0]->data+start, 0, dstsize);
+	return arr[0]->data+start;
 }
-void			array_fit(ArrayHeader **pa)
+void			array_fit(ArrayHandle *arr, size_t pad)//can be nullptr
 {
-	ArrayHeader **p;
-	if(!*pa)
+	ArrayHandle p2;
+	if(!*arr)
 		return;
-	p=(ArrayHeader**)pa;
-	p[0]->cap=p[0]->count*p[0]->esize;
-	*p=(ArrayHeader*)realloc(*p, sizeof(ArrayHeader)+p[0]->cap);
+	arr[0]->cap=(arr[0]->count+pad)*arr[0]->esize;
+	p2=(ArrayHandle)realloc(*arr, sizeof(ArrayHeader)+arr[0]->cap);
+	ASSERT_P(p2);
+	*arr=p2;
 }
-size_t			array_size(ArrayHeader const **pa)
+size_t			array_size(ArrayHandle const *arr)//can be nullptr
 {
-	ArrayHeader **p=(ArrayHeader**)pa;
-	if(!p[0])
+	if(!arr[0])
 		return 0;
-	return p[0]->count;
+	return arr[0]->count;
 }
-void*			array_at(ArrayHeader **pa, size_t idx)
+void*			array_at(ArrayHandle *arr, size_t idx)
 {
-	ArrayHeader **p=(ArrayHeader**)pa;
-	if(!p[0])
+	if(!arr[0])
 		return 0;
-	if(idx>=p[0]->count)
+	if(idx>=arr[0]->count)
 		return 0;
-	return p[0]->data+idx*p[0]->esize;
+	return arr[0]->data+idx*arr[0]->esize;
 }
-const void*		array_at_const(ArrayHeader const **pa, int idx)
+const void*		array_at_const(ArrayHandle const *arr, int idx)
 {
-	ArrayHeader const **p=(ArrayHeader const**)pa;
-	if(!p[0])
+	if(!arr[0])
 		return 0;
-	return p[0]->data+idx*p[0]->esize;
+	return arr[0]->data+idx*arr[0]->esize;
 }
-void*			array_back(ArrayHeader **pa)
+void*			array_back(ArrayHandle *arr)
 {
-	ArrayHeader **p=(ArrayHeader**)pa;
-	if(!p[0])
+	if(!*arr||!arr[0]->count)
 		return 0;
-	return p[0]->data+(p[0]->count-1)*p[0]->esize;
+	return arr[0]->data+(arr[0]->count-1)*arr[0]->esize;
 }
-const void*		array_back_const(ArrayHeader const **pa)
+const void*		array_back_const(ArrayHandle const *arr)
 {
-	ArrayHeader const **p=(ArrayHeader const**)pa;
-	if(!p[0])
+	if(!*arr||!arr[0]->count)
 		return 0;
-	return p[0]->data+(p[0]->count-1)*p[0]->esize;
+	return arr[0]->data+(arr[0]->count-1)*arr[0]->esize;
 }
-#define			ARRAY_I(ARR, IDX)			(int*)array_at(&ARR, IDX)
-#define			ARRAY_U(ARR, IDX)			(unsigned*)array_at(&ARR, IDX)
-#define			ARRAY_F(ARR, IDX)			(double*)array_at(&ARR, IDX)
-#define			ARRAY_P(ARR, IDX)			(Point*)array_at(&ARR, IDX)
 
 typedef struct PointStruct
 {
 	double x, y;
 } Point;
-//typedef struct LineStruct//can be cast to Point*
-//{
-//	double x1, y1, x2, y2;
-//} Line;
 typedef struct PathStruct
 {
 	int emerged;
-	ArrayHeader *points;
+	ArrayHandle points;
 	double r_blur;
 	Point em_ray[2];//emergence ray
 } Path;
@@ -221,7 +343,7 @@ typedef struct PhotonStruct
 {
 	double lambda;
 	int color;
-	ArrayHeader *paths;
+	ArrayHandle paths;
 	Point ground[2], em_centroid;
 } Photon;
 
@@ -599,6 +721,7 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 	double combined_slope=0;
 	//Point ground[2];
 	GlassElem *ge;
+	ArrayHandle ray_spread, emerge_count;
 
 	int mirror_ray_count=nrays*twosides;
 	//int mirror_ray_count=(nrays+1)*twosides;
@@ -618,16 +741,14 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 				}
 				array_free(&lp->paths);
 			}
-			lp->paths=array_alloc(sizeof(Path), ray_count, ray_count, "Path lightpaths[k]::paths[ray_count]");
+			ARRAY_ALLOC(Path, lp->paths, ray_count, 0, "Path lightpaths[k]::paths[ray_count]");
 		}
 	}
-	ArrayHeader *ray_spread=array_alloc(sizeof(Point), 0, ray_count*n_count, "Point ray_spread[ray_count*n_count]");
-	ArrayHeader *emerge_count=array_alloc(sizeof(int), n_count, n_count, "int emerge_count[n_count]");
+	ARRAY_ALLOC(Point, ray_spread, 0, ray_count*n_count, "Point ray_spread[ray_count*n_count]");
+	ARRAY_ALLOC(int, emerge_count, n_count, 0, "int emerge_count[n_count]");
 
 	int n_wavelengths=0;
 	double xpad=100, xstart=0;
-	//ground[1].x=xstart, ground[1].y=0;
-	//ground[0].x=ground[1].x-xpad, ground[0].y=ground[1].y-xpad*tan_tilt;
 	for(int kn=0;kn<n_count;++kn)//for each photon				simulate glass elements
 	{
 		double n=n_base+n_deltas[kn];
@@ -638,13 +759,12 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 		for(int start=-mirror_ray_count*twosides, kr=start;kr<=nrays;++kr)//for each ray/path
 		{
 			Path *p=(Path*)array_at(&lp->paths, kr-start);
-			p->points=array_alloc(sizeof(Point), 0, ge_count*2+1, "Point lightpaths[k]::paths[ray_count]::points[ecount*2+1]");
+			ARRAY_ALLOC(Point, p->points, 0, ge_count*2+1, "Point lightpaths[k]::paths[ray_count]::points[ecount*2+1]");
 			double x=xstart;
 			l1[1].x=x;
-		//	l1[1].y=aperture*(kr+1)/(nrays+1)*0.5;
-			l1[1].y=aperture*0.5*kr/nrays;
+			l1[1].y=aperture*0.5*kr/(nrays+1);
 			l1[0].x=x-xpad, l1[0].y=l1[1].y-xpad*tan_tilt;
-			array_append(&p->points, l1);
+			ARRAY_APPEND(p->points, l1, 1, 1, 0);
 			for(int k2=0;k2<ge_count;++k2)//for each glass element
 			{
 				ge=elements+k2;
@@ -654,13 +774,13 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 					p->emerged=refract_ray_surface(l1[0].x, l1[0].y, l1[1].x, l1[1].y, aperture, 1, n, x, ge->Rl, l2);
 					if(!p->emerged)
 					{
-						array_append(&p->points, l1+1);
+						ARRAY_APPEND(p->points, l1+1, 1, 1, 0);
 						break;
 					}
-					array_append(&p->points, l2);
+					ARRAY_APPEND(p->points, l2, 1, 1, 0);
 					if(p->emerged==2)
 					{
-						array_append(&p->points, l2+1);
+						ARRAY_APPEND(p->points, l2+1, 1, 1, 0);
 						break;
 					}
 				}
@@ -670,13 +790,13 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 					p->emerged=refract_ray_surface(l2[0].x, l2[0].y, l2[1].x, l2[1].y, aperture, n, 1, x, -ge->Rr, l1);
 					if(!p->emerged)
 					{
-						array_append(&p->points, l2+1);
+						ARRAY_APPEND(p->points, l2+1, 1, 1, 0);
 						break;
 					}
-					array_append(&p->points, l1);
+					ARRAY_APPEND(p->points, l1, 1, 1, 0);
 					if(p->emerged==2)
 					{
-						array_append(&p->points, l1+1);
+						ARRAY_APPEND(p->points, l1+1, 1, 1, 0);
 						break;
 					}
 				}
@@ -686,38 +806,13 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 				Point point;
 				point.x=xend;
 				point.y=extrapolate_x(l1[0].x, l1[0].y, l1[1].x, l1[1].y, xend);
-				array_append(&p->points, &point);
+				ARRAY_APPEND(p->points, &point, 1, 1, 0);
 				p->em_ray[0].x=l1->x;//save last ray segment as emergence
 				p->em_ray[0].y=l1->y;
 				p->em_ray[1].x=point.x;
 				p->em_ray[1].y=point.y;
 			}
-		/*	if(p->emerged==1)
-			{
-				Point point;
-				p->emerged=intersect_lines(ground, l1, &point);
-				if(p->emerged)
-					p->emerged=l1[0].x<point.x;
-				if(p->emerged&&point.x>xend||!p->emerged&&fabs(point.x)<1e-6)//ray is coincident with the ground
-				{
-					p->emerged=1;
-					point.x=xend;
-					point.y=extrapolate_x(ground[0].x, ground[0].y, ground[1].x, ground[1].y, xend);
-				}
-				if(p->emerged)
-				{
-					if(twosides&&kr==-1)
-						*bypass_k=*n_emerged;
-					array_append(&p->points, &point);
-					array_append(&ray_spread, &point);
-					p->em_ray.x1=l1->x;//save last ray segment as emergence
-					p->em_ray.y1=l1->y;
-					p->em_ray.x2=point.x;
-					p->em_ray.y2=point.y;
-					++*n_emerged;
-				}
-			}//*/
-			array_fit(&p->points);
+			array_fit(&p->points, 0);
 		}
 		*n_emerged=0;
 		memset(lp->ground, 0, 2*sizeof(Point));
@@ -728,7 +823,7 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 			{
 				Point point;
 				intersect_lines(p1->em_ray, p2->em_ray, &point);
-				array_append(&ray_spread, &point);
+				ARRAY_APPEND(ray_spread, &point, 1, 1, 0);
 				if(!*n_emerged)
 					lp->ground[0]=lp->ground[1]=point;
 				else
@@ -745,12 +840,6 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 		{
 			combined_ground[0].x+=lp->ground[0].x;
 			combined_ground[0].y+=lp->ground[0].y;
-			//double tan_th_num=lp->ground[1].y-lp->ground[0].y, tan_th_den=lp->ground[1].x-lp->ground[0].x;
-			//double
-			//	temp_num=combined_ground[1].y*tan_th_den+tan_th_num*combined_ground[1].x,
-			//	temp_den=tan_th_den*combined_ground[1].x-combined_ground[1].y*tan_th_num;
-			//combined_ground[1].y=temp_num;
-			//combined_ground[1].x=temp_den;
 			combined_slope+=atan2(lp->ground[1].y-lp->ground[0].y, lp->ground[1].x-lp->ground[0].x);
 			++n_wavelengths;
 		}
@@ -1112,7 +1201,7 @@ void			render()
 			MoveToEx(ghMemDC, 0, H, 0), LineTo(ghMemDC, w, H), MoveToEx(ghMemDC, V, 0, 0), LineTo(ghMemDC, V, h);
 			SetBkMode(ghMemDC, bkMode);
 
-			for(int k=0;k<n_count;++k)//
+			for(int k=0;k<n_count;++k)//draw ray ground
 			{
 				Photon *lp=lightpaths+k;
 				MoveToEx(ghMemDC, real2screenX(lp->ground[0].x, scale), real2screenY(lp->ground[0].y, scale), 0);
