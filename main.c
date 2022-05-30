@@ -1247,6 +1247,14 @@ void			wnd_resize()
 		history[k]=-1;
 	//memset(history+hist_idx, 0, (w-hist_idx)*sizeof(double));
 }
+void			messagebox(const char *title, const char *format, ...)
+{
+	va_list args;
+	va_start(args, format);
+	vsprintf_s(g_buf, G_BUF_SIZE, format, args);
+	va_end(args);
+	MessageBoxA(ghWnd, g_buf, title, MB_OK);
+}
 long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, long lParam)
 {
 	switch(message)
@@ -1463,12 +1471,42 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			if(!timer)
 				SetTimer(ghWnd, 0, 10, 0), timer=1;
 			break;
+		case VK_TAB:
+			current_elem=mod(current_elem+!kb[VK_SHIFT]-kb[VK_SHIFT], ecount);
+			break;
 		case VK_SPACE:
 			elements[current_elem].active=!elements[current_elem].active;
 			EVAL();
 			break;
-		case VK_TAB:
-			current_elem=mod(current_elem+!kb[VK_SHIFT]-kb[VK_SHIFT], ecount);
+		case VK_F1:
+			messagebox("Controls",
+				"Up/down/left/right/drag: Navigate\n"
+				"+/-/Enter/Backspace/Mousewheel: Zoom\n"
+				"X/Y +/-/Enter/Backspace: Change aspect ratio\n"
+				"T: Go to focal point\n"
+				"R: Reset view\n"
+				"E: Reset scale\n"
+				"C: Toggle clear screen\n"
+				"\n"
+				"Tab / Shift Tab: Select glass element\n"
+				"Space: Toggle glass element\n"
+				"F: Flip glass element\n"
+				"\n"
+				"1 left/right: Move glass element\n"
+				"2 left/right: Change left diopter\n"
+				"3 left/right: Change thickness\n"
+				"4 left/right: Change right diopter\n"
+				"Shift R: Reset all glass elements\n"
+				"1/2/3/4 R: Reset a particular glass element\n"
+				"\n"
+				"Ctrl +/-/Enter/Backspace: Change refractive index\n"
+				"Shift +/-/Enter/Backspace: Change ray tilt\n"
+				"Ctrl Mousewheel: Change ray count\n"
+				"\n"
+				"H: Clear history buffer\n"
+				"O: Optimize\n"
+				"\n"
+				"Built on: %s %s", __DATE__, __TIME__);
 			break;
 		case 'O'://optimize
 			{

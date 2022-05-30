@@ -3,7 +3,12 @@ Lens Simulator
 For design and optimization of compound telescope objective lenses out of simple lenses of same refractive index.
 
 
+While changing glass element parameters, the history of the standard deviation of blurriness is drawn on the screen.
+
+
 Controls:
+	F1: Show controls
+
 	Control pan and zoom with mouse
 	Enter/backspace: zoom
 	X/Y + Enter/Backspace: Scale axes
