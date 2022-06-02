@@ -697,7 +697,7 @@ GlassElem		elements[]=
 	//learned parameters (cm)
 	{1,		0,		51.2,	0.8,	1000},	//53cm gives 98cm
 	{1,		15.1,	16,		1,		-15},
-	{0,		2,		10,		1,		-10},
+	{0,		50,		10,		1,		-8.5},
 	{0,		2,		10,		1,		-10},
 
 #if 0
@@ -1221,7 +1221,7 @@ void			render()
 			GUITPrint(ghMemDC, 0, y, 0, "F\t\tflip glass element"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "O\t\toptimize"), y+=32;
 
-			GUITPrint(ghMemDC, 0, y, 0, "\t\t1 dist\t2 Rl\t3 Th\t4 Rr"), y+=16;
+			GUITPrint(ghMemDC, 0, y, 0, "\t1 dist\t2 Rl\t3 Th\t4 Rr"), y+=16;
 			for(int k=0;k<ecount;++k)
 				GUITPrint(ghMemDC, 0, y, 0, "%s  %c: %c\t%g\t%g\t%g\t%g\t%s", current_elem==k?"->":" ", 'A'+k, elements[k].active?'V':'X', elements[k].dist, elements[k].Rl, elements[k].th, elements[k].Rr, current_elem==k?"<-":""), y+=16;
 			Point *point=ray_spread_mean+n_count;
