@@ -1556,6 +1556,8 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				"3 left/right: Change thickness\n"
 				"4 left/right: Change right diopter\n"
 				"5 left/right: Change refractive index\n"
+				"Speed of change depends on zoom level\n"
+				"\n"
 				"Shift R: Reset all glass elements\n"
 				"1/2/3/4/5 R: Reset corresponding property of current glass element\n"
 				"\n"
