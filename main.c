@@ -482,27 +482,38 @@ double			r_idx2wavelength(double n)
 {
 	return (1/(n-1)-coeff_approx[0])/coeff_approx[1];
 }
-double			wavelength2refractive_index(double lambda)
+double			lambda2n(double n_base, double lambda)
 {
-	return 1+1/(coeff_approx[1]*lambda+coeff_approx[0]);
+	return n_base-1.512+1+1/(lambda/8000+1.87816);
+	//return 1+1/(coeff_approx[1]*lambda+coeff_approx[0]);
 	//return 1.60+(1.54-1.60)/(800-300)*(lambda-300);
 }
 #endif
-#define			N_COUNT	3
-Photon			lightpaths[N_COUNT]={0};//a photon can take many paths, a path may or may not emerge on CCD
-double			n_base=1.512;//refractive index of float glass
-double			n_deltas[N_COUNT]={0.0035, 0.001, -0.001};//blue->red
+#define			PH_COUNT	3
+Photon			lightpaths[PH_COUNT]={{470}, {550}, {640}};//a photon can take many paths, a path may or may not emerge on CCD
+//double		n_base=1.512;//refractive index of float glass
+//typedef struct ColorStruct
+//{
+//	double lambda, n_delta;
+//} Color;
+//Color			rays[PH_COUNT]=
+//{
+//	{493.63,  0.0035},//blue->red
+//	{569.26,  0.001},
+//	{630.30, -0.001},
+//};
 const int		n_count=SIZEOF(lightpaths);
-double			total_blur=0, lambda0=0, lambda=590;//565nm
+double			total_blur=0;
+//double		lambda0=0, lambda=590;//565nm
 int				twosides=1;
 
-Point			ray_spread_mean[N_COUNT+1]={0};//last element is centroid
+Point			ray_spread_mean[PH_COUNT+1]={0};//last element is centroid
 double			*history=0;
 int				hist_idx=0, history_enabled=1;
 
 int				nrays=5;
 double			tan_tilt=0;
-double			ap=12;//aperture
+double			ap=12, ap0=12;//aperture
 double			spread=0;
 
 int		sgn_star(double x){return 1-((x<0)<<1);}
@@ -688,17 +699,17 @@ typedef struct GlassElemStruct
 	int active;
 	union
 	{
-		struct{double dist, Rl, th, Rr;};//cm;
-		double vars[4];
+		struct{double dist, Rl, th, Rr, n;};//cm;
+		double vars[5];
 	};
 } GlassElem;
 GlassElem		elements[]=
 {
 	//learned parameters (cm)
-	{1,		0,		51.2,	0.8,	1000},	//53cm gives 98cm
-	{1,		15.1,	16,		1,		-15},
-	{0,		50,		10,		1,		-8.5},
-	{0,		2,		10,		1,		-10},
+	{1,		0,		51.2,	0.8,	10000,	1.512},	//53cm gives 98cm
+	{1,		15.1,	16,		1,		-15,	1.512},
+	{0,		50,		10,		1,		-8.5,	1.512},
+	{0,		2,		10,		1,		-10,	1.512},
 
 #if 0
 	{1,		0,		40,		2,		40},
@@ -714,7 +725,27 @@ GlassElem		elements[]=
 };
 GlassElem		*ebackup=0;
 int				ecount=SIZEOF(elements), current_elem=0;
-double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, double *n_deltas, int n_count, double aperture, double xend, double tan_tilt)
+int				shift_lambdas(double delta)
+{
+	double min_lambda=lightpaths[0].lambda, max_lambda=lightpaths[0].lambda;
+	for(int kp=1;kp<PH_COUNT;++kp)
+	{
+		if(min_lambda>lightpaths[kp].lambda)
+			min_lambda=lightpaths[kp].lambda;
+		if(max_lambda<lightpaths[kp].lambda)
+			max_lambda=lightpaths[kp].lambda;
+	}
+	if(min_lambda+delta<380||max_lambda+delta>750)
+		return 0;
+	for(int kp=0;kp<PH_COUNT;++kp)
+	{
+		Photon *lp=lightpaths+kp;
+		lp->lambda+=delta;
+		lp->color=wavelength2rgb(lp->lambda);
+	}
+	return 1;
+}
+double			eval(GlassElem *elements, int ge_count, int nrays, int n_count, double aperture, double xend, double tan_tilt)
 {
 	Point l1[2], l2[2];
 	Point combined_ground[2]={0};
@@ -726,9 +757,9 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 	int mirror_ray_count=nrays*twosides;
 	//int mirror_ray_count=(nrays+1)*twosides;
 	int ray_count=nrays+1+mirror_ray_count;
-	for(int kn=0;kn<n_count;++kn)
+	for(int kp=0;kp<n_count;++kp)
 	{
-		Photon *lp=lightpaths+kn;
+		Photon *lp=lightpaths+kp;
 		int nrays0=array_size(&lp->paths);
 		if(nrays0!=ray_count)
 		{
@@ -749,13 +780,13 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 
 	int n_wavelengths=0;
 	double xpad=100, xstart=0;
-	for(int kn=0;kn<n_count;++kn)//for each photon				simulate glass elements
+	for(int kp=0;kp<n_count;++kp)//for each photon				simulate glass elements
 	{
-		double n=n_base+n_deltas[kn];
-		Photon *lp=lightpaths+kn;
-		int *n_emerged=(int*)array_at(&emerge_count, kn);
-		lp->lambda=r_idx2wavelength(n);
-		lp->color=wavelength2rgb(lp->lambda);
+		//double n=n_base+n_deltas[kp];
+		Photon *lp=lightpaths+kp;
+		int *n_emerged=(int*)array_at(&emerge_count, kp);
+		//lp->lambda=r_idx2wavelength(n);
+		//lp->color=wavelength2rgb(lp->lambda);
 		for(int start=-mirror_ray_count*twosides, kr=start;kr<=nrays;++kr)//for each ray/path
 		{
 			Path *p=(Path*)array_at(&lp->paths, kr-start);
@@ -768,6 +799,7 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 			for(int k2=0;k2<ge_count;++k2)//for each glass element
 			{
 				ge=elements+k2;
+				double n=lambda2n(ge->n, lp->lambda);
 				x+=ge->dist;
 				if(ge->active)
 				{
@@ -855,20 +887,20 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 	Point variance_total={0};
 	Point *mean_total=ray_spread_mean+n_count;
 	mean_total->x=mean_total->y=0;
-	for(int kn=0, start=0;kn<n_count;++kn)					//find ground cross centroid
+	for(int kp=0, start=0;kp<n_count;++kp)					//find ground cross centroid
 	{
-		int count=*(int*)array_at(&emerge_count, kn);
+		int count=*(int*)array_at(&emerge_count, kp);
 		if(count)
 		{
 			Point var={0}, *points=(Point*)array_at(&ray_spread, start);
-			ray_spread_mean[kn].x=0;
-			ray_spread_mean[kn].y=0;
-			meanvar((double*)points, count, 2, &ray_spread_mean[kn].x, &var.x);
-			meanvar((double*)points+1, count, 2, &ray_spread_mean[kn].y, &var.y);
+			ray_spread_mean[kp].x=0;
+			ray_spread_mean[kp].y=0;
+			meanvar((double*)points, count, 2, &ray_spread_mean[kp].x, &var.x);
+			meanvar((double*)points+1, count, 2, &ray_spread_mean[kp].y, &var.y);
 			variance_total.x+=var.x;
 			variance_total.y+=var.y;
-			mean_total->x+=ray_spread_mean[kn].x;
-			mean_total->y+=ray_spread_mean[kn].y;
+			mean_total->x+=ray_spread_mean[kp].x;
+			mean_total->y+=ray_spread_mean[kp].y;
 			start+=count;
 		}
 	}
@@ -884,11 +916,11 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 	total_blur=0;
 	int total_npaths=0;
 	line_make_perpendicular(combined_ground, ray_spread_mean+n_count, iplane_combined);
-	for(int kn=0;kn<n_count;++kn)//for each photon (wavelength)			//cast rays on best image plane
+	for(int kp=0;kp<n_count;++kp)//for each photon (wavelength)			//cast rays on best image plane
 	{
-		Photon *lp=lightpaths+kn;
-		lp->em_centroid=ray_spread_mean[kn];
-		line_make_perpendicular(lp->ground, ray_spread_mean+kn, iplane);
+		Photon *lp=lightpaths+kp;
+		lp->em_centroid=ray_spread_mean[kp];
+		line_make_perpendicular(lp->ground, ray_spread_mean+kp, iplane);
 
 		int npaths=array_size(&lp->paths);
 		for(int kp=0;kp<npaths;++kp)//for each path
@@ -920,7 +952,7 @@ double			eval(GlassElem *elements, int ge_count, int nrays, double n_base, doubl
 	}
 	return abs_stddev;
 }
-#define	EVAL()	spread=eval(elements, ecount, nrays, n_base, n_deltas, n_count, ap, 300, tan_tilt)
+#define	EVAL()	spread=eval(elements, ecount, nrays, n_count, ap, 300, tan_tilt)
 double			calc_loss()
 {
 	return spread;
@@ -935,6 +967,12 @@ void			change_diopter(double *r, double delta)
 		*r=1/(1 / *r+delta);
 	else
 		*r=1/delta;
+}
+void			change_n(double *n, double delta)
+{
+	if(*n+delta<1.2||*n+delta>2)
+		return;
+	*n+=delta;
 }
 void			change_var(GlassElem *ge, int idx, double delta)
 {
@@ -1219,14 +1257,18 @@ void			render()
 			GUITPrint(ghMemDC, 0, y, 0, "3+left/right\tchange thickness"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "4+left/right\tchange right radius"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "F\t\tflip glass element"), y+=16;
-			GUITPrint(ghMemDC, 0, y, 0, "O\t\toptimize"), y+=32;
+			GUITPrint(ghMemDC, 0, y, 0, "O\t\toptimize"), y+=48;
 
-			GUITPrint(ghMemDC, 0, y, 0, "\t1 dist\t2 Rl\t3 Th\t4 Rr"), y+=16;
+			GUITPrint(ghMemDC, 0, y, 0, "\t1 dist\t2 Rl\t3 Th\t4 Rr\t5 n"), y+=32;
 			for(int k=0;k<ecount;++k)
-				GUITPrint(ghMemDC, 0, y, 0, "%s  %c: %c\t%g\t%g\t%g\t%g\t%s", current_elem==k?"->":" ", 'A'+k, elements[k].active?'V':'X', elements[k].dist, elements[k].Rl, elements[k].th, elements[k].Rr, current_elem==k?"<-":""), y+=16;
+				GUITPrint(ghMemDC, 0, y, 0, "%s  %c: %c\t%g\t%g\t%g\t%g\t%g\t%s", current_elem==k?"->":" ", 'A'+k, elements[k].active?'V':'X', elements[k].dist, elements[k].Rl, elements[k].th, elements[k].Rr, elements[k].n, current_elem==k?"<-":""), y+=16;
 			Point *point=ray_spread_mean+n_count;
 			double focus=sqrt(point->x*point->x+point->y*point->y);
-			GUIPrint(ghMemDC, w>>3, h*3>>2, "wavelength %gnm, n %g, F %gcm, Std.Dev %lfmm", lambda, n_base, focus, 10*spread);
+			y=h-16*6;
+			GUIPrint(ghMemDC, 0, y, "D %gcm, F %gcm, f/%g, Std.Dev %lfmm", ap, focus, focus/ap, 10*spread), y+=16;
+			GUIPrint(ghMemDC, 0, y, "lambda1 = %g", lightpaths[0].lambda), y+=16;
+			GUIPrint(ghMemDC, 0, y, "lambda2 = %g", lightpaths[1].lambda), y+=16;
+			GUIPrint(ghMemDC, 0, y, "lambda3 = %g", lightpaths[2].lambda), y+=16;
 		}
 	}
 	
@@ -1329,6 +1371,11 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				if(kb[VK_LEFT	]&&ge->active)	change_diopter(&ge->Rr, 0.01*dx), e=1;
 				if(kb[VK_RIGHT	]&&ge->active)	change_diopter(&ge->Rr, -0.01*dx), e=1;
 			}
+			else if(kb['5']||kb[VK_NUMPAD5])//refractive index
+			{
+				if(kb[VK_LEFT	]&&ge->active)	change_n(&ge->n, 0.01*dx), e=1;
+				if(kb[VK_RIGHT	]&&ge->active)	change_n(&ge->n, -0.01*dx), e=1;
+			}
 			else if(_2d_drag_graph_not_window)
 			{
 				if(kb[VK_LEFT	])	VX+=10*DX/w;
@@ -1346,14 +1393,20 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			if(kb[VK_ADD		]||kb[VK_RETURN	]||kb[VK_OEM_PLUS	])
 			{
 				if(kb[VK_CONTROL])
-				{
-					if(lambda<750)
-						lambda+=1, n_base=wavelength2refractive_index(lambda), e=1;
-				}
+					e|=shift_lambdas(1);
+				//{
+				//	if(lambda<750)
+				//		lambda+=1, n_base=wavelength2refractive_index(lambda), e=1;
+				//}
 				else if(kb[VK_SHIFT])
 				{
 					if(tan_tilt<0.7071)
 						tan_tilt+=0.00002*DX, e=1;
+				}
+				else if(kb['A'])
+				{
+					if(ap<100)
+						ap+=0.1, e=1;
 				}
 				else if(kb['X'])	DX/=1.05, AR_Y/=1.05;
 				else if(kb['Y'])	AR_Y*=1.05;
@@ -1363,14 +1416,20 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			if(kb[VK_SUBTRACT	]||kb[VK_BACK	]||kb[VK_OEM_MINUS	])
 			{
 				if(kb[VK_CONTROL])
-				{
-					if(lambda>380)
-						lambda-=1, n_base=wavelength2refractive_index(lambda), e=1;
-				}
+					e|=shift_lambdas(-1);
+				//{
+				//	if(lambda>380)
+				//		lambda-=1, n_base=wavelength2refractive_index(lambda), e=1;
+				//}
 				else if(kb[VK_SHIFT])
 				{
 					if(tan_tilt>-0.7071)
 						tan_tilt-=0.00002*DX, e=1;
+				}
+				else if(kb['A'])
+				{
+					if(ap>0)
+						ap-=0.1, e=1;
 				}
 				else if(kb['X'])	DX*=1.05, AR_Y*=1.05;
 				else if(kb['Y'])	AR_Y/=1.05;
@@ -1496,10 +1555,12 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				"2 left/right: Change left diopter\n"
 				"3 left/right: Change thickness\n"
 				"4 left/right: Change right diopter\n"
+				"5 left/right: Change refractive index\n"
 				"Shift R: Reset all glass elements\n"
-				"1/2/3/4 R: Reset a particular glass element\n"
+				"1/2/3/4/5 R: Reset corresponding property of current glass element\n"
 				"\n"
-				"Ctrl +/-/Enter/Backspace: Change refractive index\n"
+				"A +/-/Enter/Backspace: Change aperture\n"
+				"Ctrl +/-/Enter/Backspace: Shift wavelengths\n"
 				"Shift +/-/Enter/Backspace: Change ray tilt\n"
 				"Ctrl Mousewheel: Change ray count\n"
 				"\n"
@@ -1575,17 +1636,20 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				{
 					e=1;
 					tan_tilt=0;
-					lambda=lambda0;
+					ap=ap0;
+					//lambda=lambda0;
 					memcpy(elements, ebackup, ecount*sizeof(GlassElem));
 				}
 				else if(kb['1'])
-					e=1, elements[current_elem].dist=current_elem?4:0;
+					elements[current_elem].dist=ebackup[current_elem].dist, e=1;
 				else if(kb['2'])
-					e=1, elements[current_elem].Rl=100;
+					elements[current_elem].Rl=ebackup[current_elem].Rl, e=1;
 				else if(kb['3'])
-					e=1, elements[current_elem].th=0.8;
+					elements[current_elem].th=ebackup[current_elem].th, e=1;
 				else if(kb['4'])
-					e=1, elements[current_elem].Rr=100;
+					elements[current_elem].Rr=ebackup[current_elem].Rr, e=1;
+				else if(kb['5'])
+					elements[current_elem].n=ebackup[current_elem].n, e=1;
 				if(e)
 					EVAL();
 				else
@@ -1639,9 +1703,10 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 }
 int __stdcall	WinMain(HINSTANCE hInstance, HINSTANCE hPrev, char *cmdargs, int nCmdShow)
 {
+	shift_lambdas(0);
 	ebackup=(GlassElem*)malloc(ecount*sizeof(GlassElem));
 	memcpy(ebackup, elements, ecount*sizeof(GlassElem));
-	lambda0=lambda;
+	//lambda0=lambda;
 
 	hPen=CreatePen(PS_SOLID, 1, _2dCheckColor);
 	hBrush=CreateSolidBrush(_2dCheckColor);
