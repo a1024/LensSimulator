@@ -1265,7 +1265,7 @@ void			render()
 			Point *point=ray_spread_mean+n_count;
 			double focus=sqrt(point->x*point->x+point->y*point->y);
 			y=h-16*6;
-			GUIPrint(ghMemDC, 0, y, "D %gcm, F %gcm, f/%g, Std.Dev %lfmm", ap, focus, focus/ap, 10*spread), y+=16;
+			GUITPrint(ghMemDC, 0, y, 0, "D %gcm, F %gcm, f/%g\t Std.Dev %lfmm", ap, focus, focus/ap, 10*spread), y+=16;
 			GUIPrint(ghMemDC, 0, y, "lambda1 = %g", lightpaths[0].lambda), y+=16;
 			GUIPrint(ghMemDC, 0, y, "lambda2 = %g", lightpaths[1].lambda), y+=16;
 			GUIPrint(ghMemDC, 0, y, "lambda3 = %g", lightpaths[2].lambda), y+=16;
