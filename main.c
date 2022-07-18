@@ -341,7 +341,7 @@ typedef struct PathStruct
 } Path;
 typedef struct PhotonStruct
 {
-	double lambda;
+	double lambda;//nm
 	int color;
 	ArrayHandle paths;
 	Point ground[2], em_centroid;
@@ -706,10 +706,11 @@ typedef struct GlassElemStruct
 GlassElem		elements[]=
 {
 	//learned parameters (cm)
+	//on	dist	Rl		th		Rr		n
 	{1,		0,		51.2,	0.8,	10000,	1.512},	//53cm gives 98cm
-	{1,		15.1,	16,		1,		-15,	1.512},
+	{1,		18,		16,		1,		-15,	1.512},
 	{0,		50,		10,		1,		-8.5,	1.512},
-	{0,		2,		10,		1,		-10,	1.512},
+	{0,		2,		10,		1,		10000,	1.512},
 
 #if 0
 	{1,		0,		40,		2,		40},
@@ -986,11 +987,11 @@ void			change_var(GlassElem *ge, int idx, double delta)
 		break;
 	}
 }
-void			calc_grad(double *grad, double step, int *var_idx, int nvars)
+void			calc_grad(double *grad, double step, int *var_idx, int nvars, int exclude_elem)
 {
 	history_enabled=0;
 	memset(grad, 0, ecount*nvars*sizeof(double));
-	for(int ke=0;ke<ecount;++ke)//exclude first glass element
+	for(int ke=exclude_elem;ke<ecount;++ke)
 	{
 		GlassElem *ge=elements+ke;
 		if(ge->active)
@@ -1006,7 +1007,7 @@ void			calc_grad(double *grad, double step, int *var_idx, int nvars)
 	}
 	EVAL();
 	double loss=calc_loss();
-	for(int ke=0;ke<ecount;++ke)
+	for(int ke=exclude_elem;ke<ecount;++ke)
 	{
 		if(elements[ke].active)
 		{
@@ -1016,9 +1017,9 @@ void			calc_grad(double *grad, double step, int *var_idx, int nvars)
 	}
 	history_enabled=1;
 }
-void			update_params(double *grad, int *var_idx, int nvars)
+void			update_params(double *grad, int *var_idx, int nvars, int exclude_elem)
 {
-	for(int ke=0;ke<ecount;++ke)//bypass first lens
+	for(int ke=exclude_elem;ke<ecount;++ke)
 	{
 		GlassElem *ge=elements+ke;
 		if(ge->active)
@@ -1266,9 +1267,15 @@ void			render()
 			double focus=sqrt(point->x*point->x+point->y*point->y);
 			y=h-16*6;
 			GUITPrint(ghMemDC, 0, y, 0, "D %gcm, F %gcm, f/%g\t Std.Dev %lfmm", ap, focus, focus/ap, 10*spread), y+=16;
-			GUIPrint(ghMemDC, 0, y, "lambda1 = %g", lightpaths[0].lambda), y+=16;
-			GUIPrint(ghMemDC, 0, y, "lambda2 = %g", lightpaths[1].lambda), y+=16;
-			GUIPrint(ghMemDC, 0, y, "lambda3 = %g", lightpaths[2].lambda), y+=16;
+
+			int txtColor0=GetTextColor(ghMemDC);
+			SetTextColor(ghMemDC, lightpaths[0].color);
+			GUIPrint(ghMemDC, 0, y, "lambda1 = %gnm", lightpaths[0].lambda), y+=16;
+			SetTextColor(ghMemDC, lightpaths[1].color);
+			GUIPrint(ghMemDC, 0, y, "lambda2 = %gnm", lightpaths[1].lambda), y+=16;
+			SetTextColor(ghMemDC, lightpaths[2].color);
+			GUIPrint(ghMemDC, 0, y, "lambda3 = %gnm", lightpaths[2].lambda), y+=16;
+			SetTextColor(ghMemDC, txtColor0);
 		}
 	}
 	
@@ -1568,6 +1575,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				"\n"
 				"H: Clear history buffer\n"
 				"O: Optimize\n"
+				"Shift O: Optimize excluding first element\n"
 				"\n"
 				"Built on: %s %s", __DATE__, __TIME__);
 			break;
@@ -1583,14 +1591,17 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 					velocity=(double*)malloc(bytesize);
 					memset(velocity, 0, bytesize);
 				}
-				calc_grad(grad, 0.001, var_idx, nvars);
+				int exclude_first=kb[VK_SHIFT]!=0;
+				calc_grad(grad, 0.001, var_idx, nvars, exclude_first);
 				double gain=0.0000001*DX;
 				for(int k=0;k<16;++k)
 				{
 					if(grad[k])
 						velocity[k]=velocity[k]*0.5-gain*grad[k];
+					else
+						velocity[k]*=0.5;
 				}
-				update_params(velocity, var_idx, nvars);
+				update_params(velocity, var_idx, nvars, exclude_first);
 				EVAL();
 			}
 			break;
