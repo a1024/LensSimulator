@@ -33,7 +33,7 @@ HBITMAP			hBitmap;
 const unsigned
 	_2dCheckColor=0x00E0E0E0,//0x00D0D0D0	0x00EFEFEF
 	_3dGridColor=0x00D0D0D0;
-HPEN			hPen=0, hPenLens=0;
+HPEN			hPen=0, hPenLens=0, hPenMirror=0;
 HBRUSH			hBrush=0, hBrushHollow=0;
 int				w=0, h=0, X0, Y0;
 int				mx=0, my=0, kp=0;
@@ -463,7 +463,7 @@ typedef struct SurfaceRangeStruct
 } SurfaceRange;
 #endif
 
-typedef enum OpticElemStateEnum
+typedef enum OpticElemStateEnum//deprecated
 {
 	STATE_NONE,
 	STATE_MIRROR,
@@ -471,8 +471,9 @@ typedef enum OpticElemStateEnum
 } OpticElemState;
 typedef enum SurfaceTypeEnum
 {
+	SURF_UNINITIALIZED,
 	SURF_HOLE,
-	SURF_TRANSP,
+	SURF_TRANSP,//default
 	SURF_MIRROR,
 } SurfaceType;
 #if 0
@@ -549,6 +550,11 @@ typedef struct OpticElemStruct
 		profile_left, profile_right;//array of doubles: negative r[1] means mirror between r[0] and r[1]
 #endif
 } OpticElem;//no automatic destructor
+//void	free_opticElem(void *data)
+//{
+//	OpticElem *e1=(OpticElem*)data;
+//	array_free(&e1->name);
+//}
 typedef struct AreaIdxStruct
 {
 	short e_idx;
@@ -741,6 +747,16 @@ double			ap=12, ap0=12;//aperture
 double			spread=0;
 #endif
 
+void			free_elements(ArrayHandle *arr)
+{
+	for(int ke=0;ke<(int)arr[0]->count;++ke)
+	{
+		OpticElem *oe=(OpticElem*)array_at(arr, ke);
+		array_free(&oe->name);
+		//free_opticElem(oe);
+	}
+	array_free(arr);
+}
 ArrayHandle		load_text(const char *filename, int pad)
 {
 	struct stat info={0};
@@ -787,7 +803,7 @@ int				skip_ws(ArrayHandle text, int *idx, int *lineno, int *linestart)
 					if(*idx>=(int)text->count)
 					{
 						//lex_error(p, len, k, "Expected \'*/\'");
-						return 0;
+						break;
 					}
 					if(data==DUPLET('*', '/'))
 					{
@@ -797,7 +813,7 @@ int				skip_ws(ArrayHandle text, int *idx, int *lineno, int *linestart)
 					if((data&0xFF)=='\n')
 					{
 						++*idx;
-						++lineno;
+						++*lineno;
 						*linestart=*idx;
 					}
 					else
@@ -813,11 +829,80 @@ int				skip_ws(ArrayHandle text, int *idx, int *lineno, int *linestart)
 		else
 			break;
 	}
+	return *idx>=(int)text->count;
+}
+//typedef struct KeywordStruct
+//{
+//	const char *kw;
+//	int len;
+//} Keyword;
+int				match_kw(ArrayHandle text, int *idx, const char **keywords, int nkw)//returns the index of matched keyword
+{
+	for(int kk=0;kk<nkw;++kk)
+	{
+		const char *kw=keywords[kk];
+		int k=*idx, k2=0;
+		for(;k<(int)text->count;++k, ++k2)
+		{
+			if(!kw[k2])//match
+			{
+				*idx=k;
+				return kk;
+			}
+			if(text->data[k]!=kw[k2])
+				break;
+		}
+	}
+	return -1;
+}
+int				get_id(ArrayHandle text, int *idx)//returns true if valid identifier
+{
+	int valid=isalpha(text->data[*idx])||text->data[*idx]=='_';
+	if(!valid)
+		return 0;
+	do
+		++*idx;
+	while(isalnum(text->data[*idx])||text->data[*idx]=='_');
 	return 1;
 }
-int				match_kw(ArrayHandle text, int *idx, const char **kw, int nkw)//returns the index of matched keyword
-{
-}
+const char
+	kw_elem[]="elem",
+	kw_n[]="n",
+	kw_pos[]="pos",
+	kw_th[]="th",
+	kw_ap[]="ap",
+	kw_inactive[]="inactive",
+	kw_left[]="left",
+	kw_right[]="right",
+	kw_plane[]="plane",
+	kw_light[]="light",
+	kw_rays[]="rays",
+	kw_path[]="path",
+	kw_inner[]="inner",
+	kw_outer[]="outer",
+
+	kw_mirror[]="mirror",			//surface types
+	kw_transp[]="transp",//default
+	kw_hole[]="hole",
+	
+	//units:
+	kw_angestrom[]="A",
+	kw_nm[]="nm",//default for wavelength
+
+	kw_mm[]="mm",
+	kw_cm[]="cm",//default for distance
+	kw_m[]="m",
+	kw_inch[]="inch",
+	kw_ft[]="ft";
+const char
+	*ksearch_start[]={kw_elem, kw_light, kw_rays, kw_path},
+	*ksearch_attr[]={kw_n, kw_pos, kw_th, kw_ap, kw_inactive},
+	*ksearch_unit_dist[]={kw_mm, kw_cm, kw_m, kw_inch, kw_ft},
+	*ksearch_unit_lambda[]={kw_nm, kw_angestrom},
+	*ksearch_surface[]={kw_left, kw_right},
+	*ksearch_stype[]={kw_hole, kw_transp, kw_mirror},
+	*ksearch_area[]={kw_inner, kw_outer};
+#if 0
 const char *keywords[]=
 {
 	"elem", "ap", "n", "pos", "th", "left", "right", "plane", "light", "rays", "path", "inner", "outer",
@@ -826,44 +911,730 @@ const char *units[]=
 {
 	"A", "nm", "mm", "cm", "m", "inch", "ft",
 };
-int				open_system()
+#endif
+#define			EXPECT(CH)		if(text->data[*idx]!=(CH)){LOG_ERROR("%s(%d): Expected \'%c\'", filename, *lineno, CH); success=0; goto finish;} ++*idx;
+int				parse_number(const char *filename, ArrayHandle text, int *idx, int *lineno, int *linestart, int units_type, double *ret_val)
+{
+	double val=0;
+	int success=0;
+	double sign;
+
+	if(text->data[*idx]=='-')
+	{
+		++*idx;//skip minus
+		sign=-1;
+		if(skip_ws(text, idx, lineno, linestart))
+		{
+			LOG_ERROR("%s(%d): Expected a number", filename, *lineno);
+			return 0;
+		}
+	}
+	else
+		sign=1;
+	for(;*idx<(int)text->count;++*idx)
+	{
+		unsigned char c=text->data[*idx]-'0';
+		if(c>=10)
+			break;
+		val*=10;
+		val+=c;
+		success=1;
+	}
+	if(text->data[*idx]=='.')
+	{
+		++*idx;//skip point
+		double p=1;
+		for(;*idx<(int)text->count;++*idx)
+		{
+			unsigned char c=text->data[*idx]-'0';
+			if(c>=10)
+				break;
+			p*=0.1;
+			val+=c*p;
+			success=1;
+		}
+	}
+	if(!success)
+		return -1;
+	int match=0;
+	switch(units_type)
+	{
+	case 0://unit-less, eg: refractive index
+		break;
+	case 1://distance: [mm, ...m], [inch, ft]
+		match=match_kw(text, idx, ksearch_unit_dist, SIZEOF(ksearch_unit_dist));
+		switch(match)
+		{
+		case 0://mm -> cm
+			val*=0.1;
+			break;
+		case 1://cm: default, leave it as is
+			break;
+		case 2://m -> cm
+			val*=100;
+			break;
+		case 3://inch -> cm
+			val*=2.54;
+			break;
+		case 4://ft -> cm
+			val*=30.48;
+			break;
+		}
+		break;
+	case 2://wavelength
+		match=match_kw(text, idx, ksearch_unit_lambda, SIZEOF(ksearch_unit_lambda));
+		switch(match)
+		{
+		case 0://nm: default, leave it as is
+			break;
+		case 1://Angestrom -> nm
+			val*=0.1;
+			break;
+		}
+		break;
+	}
+	if(ret_val)
+		*ret_val=sign*val;
+	return success;
+}
+int				parse_elem(const char *filename, ArrayHandle text, int *idx, int *lineno, int *linestart, OpticElem *e1)
+{
+	int fieldmask=0;//{right, left,  ap, th, pos, n}
+	int success=1;
+	double ap=0;
+	
+	e1->active=1;//assume all elements initially active unless specified as 'inactive'
+	for(;;)
+	{
+		if(skip_ws(text, idx, lineno, linestart))
+		{
+			LOG_ERROR("%s(%d): Expected \'n\', \'pos\', \'th\', or \'ap\'", filename, *lineno);
+			success=0;
+			break;
+		}
+		int match=match_kw(text, idx, ksearch_attr, SIZEOF(ksearch_attr));
+		if(match==-1)
+		{
+			LOG_ERROR("%s(%d): Expected \'n\', \'pos\', \'th\', or \'ap\'", filename, *lineno);
+			success=0;
+			break;
+		}
+		if(skip_ws(text, idx, lineno, linestart))
+		{
+			LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
+			success=0;
+			break;
+		}
+		EXPECT('=')
+		if(skip_ws(text, idx, lineno, linestart))
+		{
+			LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
+			success=0;
+			break;
+		}
+		switch(match)
+		{
+		case 0://n: the refractive index
+			if(!parse_number(filename, text, idx, lineno, linestart, 0, &e1->n))
+			{
+				success=0;
+				goto finish;
+			}
+			fieldmask|=1;
+			break;
+		case 1://pos: left surface x-distance
+			{
+				double offset=0;
+				for(int ke=0;ke<(int)elements->count-1;++ke)
+				{
+					OpticElem *e2=(OpticElem*)array_at(&elements, ke);
+					const char *name=e2->name->data;
+					match=match_kw(text, idx, &name, 1);
+					if(match!=-1)
+					{
+						offset=e2->surfaces[1].pos;
+						if(skip_ws(text, idx, lineno, linestart))
+						{
+							LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
+							success=0;
+							goto finish;
+						}
+						EXPECT('+')//must add number to a previously declared element position
+						if(skip_ws(text, idx, lineno, linestart))
+						{
+							LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
+							success=0;
+							goto finish;
+						}
+						break;
+					}
+				}
+				if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->surfaces[0].pos))
+				{
+					success=0;
+					goto finish;
+				}
+				e1->surfaces[0].pos+=offset;
+				fieldmask|=2;
+			}
+			break;
+		case 2://th: the element thickness at center
+			if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->surfaces[1].pos))//left.pos is to be added
+			{
+				success=0;
+				goto finish;
+			}
+			fieldmask|=4;
+			break;
+		case 3://ap: the aperture (diameter), if not specified then both left & right specifications must mention r_max[1]
+			if(!parse_number(filename, text, idx, lineno, linestart, 1, &ap))//left.pos is to be added
+			{
+				success=0;
+				goto finish;
+			}
+			fieldmask|=8;
+			break;
+		case 4:
+			e1->active=0;
+			break;
+		}
+		if(text->data[*idx]==';')
+		{
+			++*idx;
+			break;
+		}
+		EXPECT(',')
+	}
+	
+	while((fieldmask&0x30)!=0x30)
+	{
+		if(skip_ws(text, idx, lineno, linestart))
+		{
+			LOG_ERROR("%s(%d): Expected \'left\' or \'right\'", filename, *lineno);
+			success=0;
+			break;
+		}
+		int match=match_kw(text, idx, ksearch_surface, SIZEOF(ksearch_surface));
+		if(match==-1)//not an error
+			break;
+		if(match)//right surface
+		{
+			if((fieldmask&0x20)==0x20)
+			{
+				LOG_ERROR("%s(%d): \'right\' was encountered before", filename, *lineno);
+				success=0;
+				goto finish;
+			}
+			fieldmask|=0x20;
+		}
+		else//left surface
+		{
+			if((fieldmask&0x10)==0x10)
+			{
+				LOG_ERROR("%s(%d): \'right\' was encountered before", filename, *lineno);
+				success=0;
+				goto finish;
+			}
+			fieldmask|=0x10;
+		}
+		if(skip_ws(text, idx, lineno, linestart))
+		{
+			LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
+			success=0;
+			break;
+		}
+		EXPECT('=')
+		if(skip_ws(text, idx, lineno, linestart))
+		{
+			LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
+			success=0;
+			break;
+		}
+
+		const char *kw2=kw_plane;
+		int match2=match_kw(text, idx, &kw2, 1);
+		if(match2==-1)//parse normal number
+		{
+			if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->surfaces[match].radius))//negate only the right radius later
+			{
+				success=0;
+				goto finish;
+			}
+		}
+		else//set radius 0 for plane
+			e1->surfaces[match].radius=0;
+		
+		if(skip_ws(text, idx, lineno, linestart))
+		{
+			LOG_ERROR("%s(%d): Expected \':\' or \';\'", filename, *lineno);
+			success=0;
+			break;
+		}
+		if(text->data[*idx]==':')
+		{
+			++*idx;//skip colon
+			if(skip_ws(text, idx, lineno, linestart))
+			{
+				LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno);
+				success=0;
+				break;
+			}
+			match2=match_kw(text, idx, ksearch_stype, SIZEOF(ksearch_stype));
+			if(match2==-1)
+			{
+				LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno);
+				success=0;
+				break;
+			}
+			switch(match2)
+			{
+			case 0:e1->surfaces[match].type[0]=SURF_HOLE;break;
+			case 1:e1->surfaces[match].type[0]=SURF_TRANSP;break;
+			case 2:e1->surfaces[match].type[0]=SURF_MIRROR;break;
+			}
+			if(skip_ws(text, idx, lineno, linestart))
+			{
+				LOG_ERROR("%s(%d): Expected \';\' at the end of %s declaration", filename, *lineno, match?"right":"left");
+				success=0;
+				break;
+			}
+			if((fieldmask&8)==8&&text->data[*idx]==';')
+			{
+				++*idx;
+				continue;
+			}
+			EXPECT(',')
+			if(skip_ws(text, idx, lineno, linestart))
+			{
+				LOG_ERROR("%s(%d): Expected a number", filename, *lineno);
+				success=0;
+				break;
+			}
+			if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->surfaces[match].r_max[0]))
+			{
+				success=0;
+				goto finish;
+			}
+			if(skip_ws(text, idx, lineno, linestart))
+			{
+				LOG_ERROR("%s(%d): Expected \',\'");
+				success=0;
+				break;
+			}
+			if(text->data[*idx]==';')//one area
+			{
+				++*idx;
+				e1->surfaces[match].r_max[1]=e1->surfaces[match].r_max[0];
+				e1->surfaces[match].type[1]=e1->surfaces[match].type[0];
+				continue;
+			}
+			EXPECT(',')
+			if(skip_ws(text, idx, lineno, linestart))
+			{
+				LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno, match?"right":"left");
+				success=0;
+				break;
+			}
+			match2=match_kw(text, idx, ksearch_stype, SIZEOF(ksearch_stype));
+			if(match2==-1)
+			{
+				LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno);
+				success=0;
+				break;
+			}
+			switch(match2)
+			{
+			case 0:e1->surfaces[match].type[1]=SURF_HOLE;break;
+			case 1:e1->surfaces[match].type[1]=SURF_TRANSP;break;
+			case 2:e1->surfaces[match].type[1]=SURF_MIRROR;break;
+			}
+			if(skip_ws(text, idx, lineno, linestart))
+			{
+				LOG_ERROR("%s(%d): Expected a number", filename, *lineno);
+				success=0;
+				break;
+			}
+			if(!(fieldmask&8))//if aperture wasn't declared
+			{
+				EXPECT(',')
+				if(skip_ws(text, idx, lineno, linestart))
+				{
+					LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno, match?"right":"left");
+					success=0;
+					break;
+				}
+				if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->surfaces[match].r_max[1]))
+				{
+					success=0;
+					goto finish;
+				}
+				if(skip_ws(text, idx, lineno, linestart))
+				{
+					LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno, match?"right":"left");
+					success=0;
+					break;
+				}
+			}
+		}
+		EXPECT(';')
+	}
+	e1->surfaces[1].pos+=e1->surfaces[0].pos;//add left position to thickness
+	//if(e1->surfaces[1].radius)
+		e1->surfaces[1].radius=-e1->surfaces[1].radius;//flip right radius
+	if(fieldmask&8)//if aperture was declared, it overrides left & right declarations
+	{
+		ap*=0.5;
+		e1->surfaces[0].r_max[1]=ap;
+		e1->surfaces[1].r_max[1]=ap;
+	}
+	//if(!e1->surfaces[0].r_max[0])//if inner radius is zero, then set it as outer radius
+	//	e1->surfaces[0].r_max[0]=e1->surfaces[0].r_max[1];
+	//if(!e1->surfaces[1].r_max[0])
+	//	e1->surfaces[1].r_max[0]=e1->surfaces[1].r_max[1];
+	for(int k=0;k<2;++k)//set transparent by default
+	{
+		for(int k2=0;k2<2;++k2)
+			if(e1->surfaces[k].type[k2]==SURF_UNINITIALIZED)
+				e1->surfaces[k].type[k2]=SURF_TRANSP;
+	}
+finish:
+	return success;
+}
+#undef			EXPECT
+#define			EXPECT(CH)		if(text->data[idx]!=(CH)){LOG_ERROR("%s(%d): Expected \'%c\'", filename, lineno, CH); success=0; goto finish;} ++idx;
+int				open_system(const char *filename)
 {
 	ArrayHandle text;
-
-	g_buf[0]=0;
-	OPENFILENAMEA ofn=
+	int success;
+	
+	if(!filename)
 	{
-		sizeof(OPENFILENAMEA),
-		ghWnd, ghInstance,
-		"Text Files (.txt)\0*.txt\0",//filter
-		0, 0,//custom filter
-		1,//filter idx
-		g_buf, G_BUF_SIZE,//filename
-		0, 0,//filetitle
-		0,//initial directory (default)
-		0,//dialog title
-		OFN_CREATEPROMPT|OFN_PATHMUSTEXIST,//flags
-		0,//file offset
-		0,//extension offset
-		"txt",//default extension
-		0, 0,//data & hook
-		0,//template name
-		0,//reserved
-		0,//reserved
-		0,//flags ex
-	};
-	int success=GetOpenFileNameA(&ofn);
-	if(!success)
-		return 0;
+		OPENFILENAMEA ofn=
+		{
+			sizeof(OPENFILENAMEA),
+			ghWnd, ghInstance,
+			"Text Files (.txt)\0*.txt\0",//filter
+			0, 0,//custom filter
+			1,//filter idx
+			g_buf, G_BUF_SIZE,//filename
+			0, 0,//filetitle
+			0,//initial directory (default)
+			0,//dialog title
+			OFN_CREATEPROMPT|OFN_PATHMUSTEXIST,//flags
+			0,//file offset
+			0,//extension offset
+			"txt",//default extension
+			0, 0,//data & hook
+			0,//template name
+			0,//reserved
+			0,//reserved
+			0,//flags ex
+		};
+		g_buf[0]=0;
+		success=GetOpenFileNameA(&ofn);
+		if(!success)
+			return 0;
+		filename=ofn.lpstrFile;
+	}
 
-	text=load_text(ofn.lpstrFile, 16);
+	text=load_text(filename, 16);
 	if(!text)
 		return 0;
 
+	array_clear(&elements);
+	ARRAY_ALLOC(OpticElem, elements, 0, 0, 0, 0);
+	
+	array_clear(&photons);
+	ARRAY_ALLOC(Photon, photons, 0, 0, 0, free_photon);
+
+	array_clear(&order);
+	ARRAY_ALLOC(AreaIdx, order, 0, 0, 0, 0);
+
 	for(int idx=0, lineno=0, linestart=0;;)
 	{
-	}
+		if(skip_ws(text, &idx, &lineno, &linestart))
+			break;
 
+		int match=match_kw(text, &idx, ksearch_start, SIZEOF(ksearch_start));
+		if(match==-1)
+		{
+			LOG_ERROR("%s(%d): Expected \'elem\', \'light\', \'rays\', or \'path\'", filename, lineno);
+			success=0;
+			break;
+		}
+		if(skip_ws(text, &idx, &lineno, &linestart))
+		{
+			LOG_ERROR("%s(%d): Expected a declaration", filename, lineno);
+			success=0;
+			break;
+		}
+		switch(match)
+		{
+		case 0://elem
+			{
+				OpticElem *e1=(OpticElem*)ARRAY_APPEND(elements, 0, 1, 1, 0);
+				int start=idx;
+				get_id(text, &idx);
+				if(start>=idx)
+				{
+					LOG_ERROR("%s(%d): Element %d has no name", filename, lineno, (int)elements->count-1);
+					success=0;
+					goto finish;
+				}
+				STR_COPY(e1->name, text->data+start, idx-start);
+				for(int ke=0;ke<(int)elements->count-1;++ke)//check for name uniqueness
+				{
+					OpticElem *e2=(OpticElem*)array_at(&elements, ke);
+					if(!strcmp(e2->name->data, e1->name->data))
+					{
+						LOG_ERROR("%s(%d): Element \'%s\' appeared twice at %d and %d", filename, lineno, e1->name->data, ke, (int)elements->count-1);
+						success=0;
+						goto finish;
+					}
+				}
+				if(skip_ws(text, &idx, &lineno, &linestart))
+				{
+					success=0;
+					goto finish;
+				}
+				EXPECT(',')
+				if(skip_ws(text, &idx, &lineno, &linestart))
+				{
+					success=0;
+					goto finish;
+				}
+				parse_elem(filename, text, &idx, &lineno, &linestart, e1);
+			}
+			break;
+		case 1://light
+			{
+				EXPECT(':')
+				array_clear(&photons);
+				for(;;)
+				{
+					if(skip_ws(text, &idx, &lineno, &linestart))
+					{
+						LOG_ERROR("%s(%d): Expected a number", filename, lineno);
+						success=0;
+						goto finish;
+					}
+					Photon *ph=(Photon*)ARRAY_APPEND(photons, 0, 1, 1, 0);
+					success=parse_number(filename, text, &idx, &lineno, &linestart, 2, &ph->lambda);
+					ph->color=wavelength2rgb(ph->lambda);
+					if(skip_ws(text, &idx, &lineno, &linestart))
+					{
+						LOG_ERROR("%s(%d): Expected a number", filename, lineno);
+						success=0;
+						goto finish;
+					}
+					if(text->data[idx]==';')
+					{
+						++idx;
+						break;
+					}
+					EXPECT(',');
+				}
+			}
+			break;
+		case 2://rays
+			{
+				double f_nrays=0;
+				ArrayHandle name;
+				EXPECT(':')
+				if(skip_ws(text, &idx, &lineno, &linestart))
+				{
+					LOG_ERROR("%s(%d): Expected a number", filename, lineno);
+					success=0;
+					goto finish;
+				}
+				success=parse_number(filename, text, &idx, &lineno, &linestart, 0, &f_nrays);
+				nrays=(int)f_nrays;
+				if(skip_ws(text, &idx, &lineno, &linestart))
+				{
+					LOG_ERROR("%s(%d): Expected a number", filename, lineno);
+					success=0;
+					goto finish;
+				}
+				EXPECT(',')
+				if(skip_ws(text, &idx, &lineno, &linestart))
+				{
+					LOG_ERROR("%s(%d): Expected a number", filename, lineno);
+					success=0;
+					goto finish;
+				}
+				int start=idx;
+				get_id(text, &idx);
+				if(start>=idx)
+				{
+					LOG_ERROR("%s(%d): Expected an element name", filename, lineno);
+					success=0;
+					goto finish;
+				}
+				STR_COPY(name, text->data+start, idx-start);
+				for(int ke=0;ke<(int)elements->count;++ke)
+				{
+					OpticElem *e1=(OpticElem*)array_at(&elements, ke);
+					if(!strcmp(name->data, e1->name->data))
+					{
+						initial_target.e_idx=ke;
+						break;
+					}
+				}
+				array_free(&name);
+				if(skip_ws(text, &idx, &lineno, &linestart))
+				{
+					LOG_ERROR("%s(%d): Expected \'.\'", filename, lineno);
+					success=0;
+					goto finish;
+				}
+				EXPECT('.')
+				if(skip_ws(text, &idx, &lineno, &linestart))
+				{
+					LOG_ERROR("%s(%d): Expected \'left\', or \'right\'", filename, lineno);
+					success=0;
+					goto finish;
+				}
+				match=match_kw(text, &idx, ksearch_surface, SIZEOF(ksearch_surface));
+				if(match==-1)
+				{
+					LOG_ERROR("%s(%d): Expected \'left\', or \'right\'", filename, lineno);
+					success=0;
+					break;
+				}
+				initial_target.is_right_not_left=match;
+				if(skip_ws(text, &idx, &lineno, &linestart))
+				{
+					LOG_ERROR("%s(%d): Expected \'.\'", filename, lineno);
+					success=0;
+					goto finish;
+				}
+				EXPECT('.')
+				if(skip_ws(text, &idx, &lineno, &linestart))
+				{
+					LOG_ERROR("%s(%d): Expected \'inner\', or \'outer\'", filename, lineno);
+					success=0;
+					goto finish;
+				}
+				match=match_kw(text, &idx, ksearch_area, SIZEOF(ksearch_area));
+				if(match==-1)
+				{
+					LOG_ERROR("%s(%d): Expected \'inner\', or \'outer\'", filename, lineno);
+					success=0;
+					break;
+				}
+				initial_target.is_outer_not_inner=match;
+				if(skip_ws(text, &idx, &lineno, &linestart))
+				{
+					LOG_ERROR("%s(%d): Expected \';\'", filename, lineno);
+					success=0;
+					goto finish;
+				}
+				EXPECT(';')
+			}
+			break;
+		case 3://path
+			{
+				EXPECT(':')
+				for(;;)
+				{
+					ArrayHandle name;
+					if(skip_ws(text, &idx, &lineno, &linestart))
+					{
+						LOG_ERROR("%s(%d): Expected a number", filename, lineno);
+						success=0;
+						goto finish;
+					}
+					int start=idx;
+					get_id(text, &idx);
+					if(start>=idx)
+					{
+						LOG_ERROR("%s(%d): Expected an element name", filename, lineno);
+						success=0;
+						goto finish;
+					}
+					AreaIdx *aidx=(AreaIdx*)ARRAY_APPEND(order, 0, 1, 1, 0);
+					STR_COPY(name, text->data+start, idx-start);
+					for(int ke=0;ke<(int)elements->count;++ke)
+					{
+						OpticElem *e1=(OpticElem*)array_at(&elements, ke);
+						if(!strcmp(name->data, e1->name->data))
+						{
+							aidx->e_idx=ke;
+							break;
+						}
+					}
+					array_free(&name);
+					if(skip_ws(text, &idx, &lineno, &linestart))
+					{
+						LOG_ERROR("%s(%d): Expected \'.\'", filename, lineno);
+						success=0;
+						goto finish;
+					}
+					EXPECT('.')
+
+					if(skip_ws(text, &idx, &lineno, &linestart))
+					{
+						LOG_ERROR("%s(%d): Expected \'left\', or \'right\'", filename, lineno);
+						success=0;
+						goto finish;
+					}
+					match=match_kw(text, &idx, ksearch_surface, SIZEOF(ksearch_surface));
+					if(match==-1)
+					{
+						LOG_ERROR("%s(%d): Expected \'left\', or \'right\'", filename, lineno);
+						success=0;
+						break;
+					}
+					aidx->is_right_not_left=match;
+
+					if(skip_ws(text, &idx, &lineno, &linestart))
+					{
+						LOG_ERROR("%s(%d): Expected \'.\'", filename, lineno);
+						success=0;
+						goto finish;
+					}
+					if(text->data[idx]==','||text->data[idx]==';')//default is outer
+					{
+						int end=text->data[idx]==';';
+						++idx;//skip comma
+						aidx->is_outer_not_inner=1;
+						if(end)
+							break;
+						continue;
+					}
+					EXPECT('.')
+
+					if(skip_ws(text, &idx, &lineno, &linestart))
+					{
+						LOG_ERROR("%s(%d): Expected \'inner\', or \'outer\'", filename, lineno);
+						success=0;
+						goto finish;
+					}
+					
+					match=match_kw(text, &idx, ksearch_area, SIZEOF(ksearch_area));
+					if(match==-1)
+					{
+						LOG_ERROR("%s(%d): Expected \'inner\', or \'outer\'", filename, lineno);
+						success=0;
+						break;
+					}
+					aidx->is_outer_not_inner=match;
+					
+					if(skip_ws(text, &idx, &lineno, &linestart))
+					{
+						LOG_ERROR("%s(%d): Expected \',\' or \';\'", filename, lineno);
+						success=0;
+						goto finish;
+					}
+					if(text->data[idx]==';')
+						break;
+					EXPECT(',')
+				}
+			}
+			break;
+		}
+	}
+finish:
 	array_free(&text);
 	return success;
 }
@@ -918,7 +1689,7 @@ int		intersect_ray_surface(double x1, double y1, double x2, double y2, double ap
 		hit=intersect_line_circle(x1, y1, x2, y2, xcenter, R, sol);
 		if(hit)
 		{
-			int second=(R>0)==(sol[0].x<sol[1].x);//convex from left XNOR sol0 is leftmost
+			int second=(R>0)!=(sol[0].x<sol[1].x);//convex from left XNOR sol0 is leftmost
 			*ret_point=sol[second];
 		}
 	}
@@ -1180,10 +1951,12 @@ void			simulate()//number of rays must be even, always double-sided
 	for(int kp=0;kp<(int)photons->count;++kp)
 	{
 		Photon *ph=(Photon*)array_at(&photons, kp);
+		array_clear(&ph->paths);
+		ARRAY_ALLOC(Path, ph->paths, 0, nrays, 0, free_path);
 		for(int kp2=0;kp2<(int)ph->paths->count;++kp2)//for each ray	path->count must be even
 		{
 			Path *path=(Path*)array_at(&ph->paths, kp2);
-			array_clear(&path->points);
+			ARRAY_ALLOC(Point, path->points, 0, 0, 0, 0);
 			Point *points=ARRAY_APPEND(path->points, 0, 2, 1, 0);
 			points->x=xstart;
 			points->y=ymin+(kp2>>1)*(ymax-ymin)/(ph->paths->count>>1)+0.5;
@@ -1194,9 +1967,10 @@ void			simulate()//number of rays must be even, always double-sided
 	}
 
 	//main simulation loop
-	for(int ke=0;ke<(int)order->count;++ke)
+	for(int ko=0;ko<(int)order->count;++ko)//for each areidx in list order
 	{
-		e1=(OpticElem*)array_at(&elements, ke);
+		aidx=(AreaIdx*)array_at(&order, ko);
+		e1=(OpticElem*)array_at(&elements, aidx->e_idx);//fetch element
 		for(int kp=0;kp<(int)photons->count;++kp)
 		{
 			Photon *ph=(Photon*)array_at(&photons, kp);
@@ -1574,29 +2348,41 @@ void			draw_line(double x1, double y1, double x2, double y2, ScaleConverter *sca
 	MoveToEx(ghMemDC, real2screenX(x1, scale), real2screenY(y1, scale), 0);
 	LineTo(ghMemDC, real2screenX(x2, scale), real2screenY(y2, scale));
 }
-double			draw_arc(double x, double R, double ap, ScaleConverter *scale, int nsegments)//returns top x
+double			draw_arc(double x, double R, double ap_min, double ap_max, ScaleConverter *scale, int nsegments)//returns top x
 {
 	double r2=R*R;
-	int x1, y1, x2, y2;
+	int x1, y1, x2, y2,
+		y3, y4;
 	if(!R)
 	{
 		x1=real2screenX(x, scale);
-		y1=real2screenY(-ap*0.5, scale), y2=real2screenY(ap*0.5, scale);
+
+		y1=real2screenY(ap_min, scale), y2=real2screenY(ap_max, scale);
+		MoveToEx(ghMemDC, x1, y1, 0);
+		LineTo(ghMemDC, x1, y2);
+
+		y1=real2screenY(-ap_min, scale), y2=real2screenY(-ap_max, scale);
 		MoveToEx(ghMemDC, x1, y1, 0);
 		LineTo(ghMemDC, x1, y2);
 		return x;
 	}
 	double ty, tx;
-	for(int k=-nsegments;k<=nsegments;++k)
+	for(int k=0;k<=nsegments;++k)
 	{
-		ty=ap*k/nsegments*0.5, tx=x+R-sgn_star(R)*sqrt(r2-ty*ty);
-		x2=real2screenX(tx, scale), y2=real2screenY(ty, scale);
-		if(k>-nsegments)
+		ty=ap_min+(ap_max-ap_min)*k/nsegments, tx=x+R-sgn_star(R)*sqrt(r2-ty*ty);
+		x2=real2screenX(tx, scale);
+		y2=real2screenY(ty, scale);
+		y4=real2screenY(-ty, scale);
+		if(k>0)
 		{
 			MoveToEx(ghMemDC, x1, y1, 0);
 			LineTo(ghMemDC, x2, y2);
+			MoveToEx(ghMemDC, x1, y3, 0);
+			LineTo(ghMemDC, x2, y4);
 		}
-		x1=x2, y1=y2;
+		x1=x2;
+		y1=y2;
+		y3=y4;
 	}
 	return tx;
 }
@@ -1656,10 +2442,44 @@ void			render()
 		for(int ke=0;ke<(int)elements->count;++ke)			//draw optical elements
 		{
 			OpticElem *oe=(OpticElem*)array_at(&elements, ke);
+
+			//draw inner area
+			if(oe->active||oe->surfaces[0].type[0]==SURF_MIRROR)
+			{
+				if(oe->surfaces[0].type[0]==SURF_MIRROR)
+					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+				draw_arc(oe->surfaces[0].pos, oe->surfaces[0].radius, 0, oe->surfaces[0].r_max[0], scale, segments);
+				if(oe->surfaces[0].type[0]==SURF_MIRROR)
+					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+			}
+			if(oe->active||oe->surfaces[1].type[0]==SURF_MIRROR)
+			{
+				if(oe->surfaces[1].type[0]==SURF_MIRROR)
+					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+				draw_arc(oe->surfaces[1].pos, oe->surfaces[1].radius, 0, oe->surfaces[1].r_max[0], scale, segments);
+				if(oe->surfaces[1].type[0]==SURF_MIRROR)
+					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+			}
+
+			//draw outer area
+			if(oe->active||oe->surfaces[0].type[1]==SURF_MIRROR)
+			{
+				if(oe->surfaces[0].type[1]==SURF_MIRROR)
+					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+				topx1=draw_arc(oe->surfaces[0].pos, oe->surfaces[0].radius, oe->surfaces[0].r_max[0], oe->surfaces[0].r_max[1], scale, segments);
+				if(oe->surfaces[0].type[1]==SURF_MIRROR)
+					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+			}
+			if(oe->active||oe->surfaces[1].type[1]==SURF_MIRROR)
+			{
+				if(oe->surfaces[1].type[1]==SURF_MIRROR)
+					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+				topx2=draw_arc(oe->surfaces[1].pos, oe->surfaces[1].radius, oe->surfaces[1].r_max[0], oe->surfaces[1].r_max[1], scale, segments);
+				if(oe->surfaces[1].type[1]==SURF_MIRROR)
+					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+			}
 			if(oe->active)
 			{
-				topx1=draw_arc(oe->surfaces[0].pos, oe->surfaces[0].radius, oe->surfaces[0].r_max[1], scale, segments);
-				topx2=draw_arc(oe->surfaces[1].pos, oe->surfaces[1].radius, oe->surfaces[1].r_max[1], scale, segments);
 				draw_line(topx1, oe->surfaces[0].r_max[1], topx2, oe->surfaces[1].r_max[1], scale);
 				draw_line(topx1, -oe->surfaces[0].r_max[1], topx2, -oe->surfaces[1].r_max[1], scale);
 			}
@@ -1690,10 +2510,13 @@ void			render()
 		}
 		{
 			Point *point=(Point*)array_back(&ray_spread_mean);
-			int xcenter=real2screenX(point->x, scale),
-				ycenter=real2screenY(point->y, scale);
-			int rx=(int)(total_blur*Xr), ry=(int)(total_blur*Yr);
-			Ellipse(ghMemDC, xcenter-rx, ycenter-ry, xcenter+rx, ycenter+ry);//combined blur circle
+			if(point)
+			{
+				int xcenter=real2screenX(point->x, scale),
+					ycenter=real2screenY(point->y, scale);
+				int rx=(int)(total_blur*Xr), ry=(int)(total_blur*Yr);
+				Ellipse(ghMemDC, xcenter-rx, ycenter-ry, xcenter+rx, ycenter+ry);//combined blur circle
+			}
 		}
 		hBrushHollow=(HBRUSH)SelectObject(ghMemDC, hBrushHollow);
 
@@ -1768,12 +2591,15 @@ void			render()
 				GUITPrint(ghMemDC, 0, y, 0, "%s  %c: %c\t%g\t%g\t%g\t%g\t%g%s", current_elem==ke?"->":" ", 'A'+ke, oe->active?'V':'X', oe->surfaces[0].pos, oe->surfaces[0].radius, th, -oe->surfaces[1].radius, oe->n, current_elem==ke?"\t<-":""), y+=16;
 			}
 			Point *point=(Point*)array_at(&ray_spread_mean, (int)photons->count);
-			double focus=sqrt(point->x*point->x+point->y*point->y);
-			AreaIdx *aidx=(AreaIdx*)array_at(&order, 0);
-			OpticElem *oe=(OpticElem*)array_at(&elements, aidx->e_idx);
-			double ap=oe->surfaces[aidx->is_right_not_left].r_max[1];
-			y=h-16*6;
-			GUITPrint(ghMemDC, 0, y, 0, "D %gcm, F %gcm, f/%g\t Std.Dev %lfmm", ap, focus, focus/ap, 10*spread), y+=16;
+			if(point)
+			{
+				double focus=sqrt(point->x*point->x+point->y*point->y);
+				AreaIdx *aidx=(AreaIdx*)array_at(&order, 0);
+				OpticElem *oe=(OpticElem*)array_at(&elements, aidx->e_idx);
+				double ap=oe->surfaces[aidx->is_right_not_left].r_max[1];
+				y=h-16*6;
+				GUITPrint(ghMemDC, 0, y, 0, "D %gcm, F %gcm, f/%g\t Std.Dev %lfmm", ap, focus, focus/ap, 10*spread), y+=16;
+			}
 
 			int txtColor0=GetTextColor(ghMemDC);
 			for(int kp=0;kp<(int)photons->count;++kp)
@@ -2091,15 +2917,15 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 		case 'O':
 			if(kb[VK_CONTROL])//open another system
 			{
-				if(open_system())
+				if(open_system(0))
 				{
-					array_free(&ebackup);
+					free_elements(&ebackup);
 					ebackup=array_copy(&elements);
 					simulate();
 				}
 				else
 				{
-					array_free(&elements);
+					free_elements(&elements);
 					elements=array_copy(&ebackup);
 				}
 			}
@@ -2284,14 +3110,17 @@ int __stdcall	WinMain(HINSTANCE hInstance, HINSTANCE hPrev, char *cmdargs, int n
 	ghInstance=hInstance;
 	hPen=CreatePen(PS_SOLID, 1, _2dCheckColor);
 	hBrush=CreateSolidBrush(_2dCheckColor);
-	hPenLens=CreatePen(PS_SOLID, 1, 0x00FF00FF);
+	hPenLens=CreatePen(PS_SOLID, 1, 0x00808080);
+	hPenMirror=CreatePen(PS_SOLID, 1, 0x00FF00FF);
 	hBrushHollow=(HBRUSH)GetStockObject(NULL_BRUSH);
 
 	RegisterClassExA(&wndClassEx);
 	ghWnd=CreateWindowExA(0, wndClassEx.lpszClassName, "Optics Simulator", WS_CAPTION|WS_SYSMENU|WS_THICKFRAME|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_CLIPCHILDREN, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, 0, 0, hInstance, 0);//20220504
 	
-		if(!open_system())
-			return 1;
+		if(__argc==2)
+			open_system(__argv[1]);
+		//if(!open_system())
+		//	return 1;
 		wnd_resize();
 		function1();
 
