@@ -818,6 +818,14 @@ int				skip_ws(ArrayHandle text, int *idx, int *lineno, int *linestart)
 int				match_kw(ArrayHandle text, int *idx, const char **kw, int nkw)//returns the index of matched keyword
 {
 }
+const char *keywords[]=
+{
+	"elem", "ap", "n", "pos", "th", "left", "right", "plane", "light", "rays", "path", "inner", "outer",
+};
+const char *units[]=
+{
+	"A", "nm", "mm", "cm", "m", "inch", "ft",
+};
 int				open_system()
 {
 	ArrayHandle text;
