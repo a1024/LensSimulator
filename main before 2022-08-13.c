@@ -20,13 +20,12 @@
 #define	_USE_MATH_DEFINES
 #include<math.h>
 #include<Windows.h>
-#include<sys/stat.h>
+
+	#define		DEBUG_INFO_STR
 
 #define			SIZEOF(ST_ARR)	(sizeof(ST_ARR)/sizeof(*(ST_ARR)))
 #define			G_BUF_SIZE	2048
 char			g_buf[G_BUF_SIZE]={0};
-//wchar_t		g_wbuf[G_BUF_SIZE]={0};
-HINSTANCE		ghInstance;
 HWND			ghWnd;
 HDC				ghDC, ghMemDC;
 HBITMAP			hBitmap;
@@ -68,21 +67,13 @@ int				GUITPrint(HDC hDC, int x, int y, int tab_origin, const char* format, ...)
 	}
 	return 0;
 }
-void			messagebox(const char *title, const char *format, ...)
-{
-	va_list args;
-	va_start(args, format);
-	vsprintf_s(g_buf, G_BUF_SIZE, format, args);
-	va_end(args);
-	MessageBoxA(ghWnd, g_buf, title, MB_OK);
-}
-
 int				mod(int x, int n)
 {
 	x%=n;
 	x+=n&-(x<0);
 	return x;
 }
+
 void			memfill(void *dst, const void *src, size_t dstbytes, size_t srcbytes)
 {
 	unsigned copied;
@@ -103,58 +94,33 @@ void			memfill(void *dst, const void *src, size_t dstbytes, size_t srcbytes)
 	if(copied<dstbytes)
 		memcpy(d+copied, d, dstbytes-copied);
 }
-
 char			error_msg[G_BUF_SIZE]={0};
 int				runtime_error(const char *file, int line, const char *format, ...)
 {
 	va_list args;
-	int printed;
-
-	printed=sprintf_s(error_msg, G_BUF_SIZE, "%s(%d) ERROR\n", file, line);
+	sprintf_s(error_msg, G_BUF_SIZE, "%s(%d) ERROR\n", file, line);
 	if(format)
 	{
 		va_start(args, format);
-		printed+=vsprintf_s(error_msg+printed, G_BUF_SIZE-printed, format, args);
+		vsprintf_s(error_msg, G_BUF_SIZE, format, args);
 		va_end(args);
-		printed+=sprintf_s(error_msg+printed, G_BUF_SIZE-printed, "\n");
+		printf("\n");
 	}
-	messagebox("Error", error_msg);
 	//pause();
 	return 0;
 }
 int				valid(const void *p)
 {
-	size_t val=(size_t)p;
-
-	if(sizeof(size_t)==4)
+	switch((size_t)p)
 	{
-		switch(val)
-		{
-		case 0:
-		case 0xCCCCCCCC:
-		case 0xFEEEFEEE:
-		case 0xEEFEEEFE:
-		case 0xCDCDCDCD:
-		case 0xFDFDFDFD:
-		case 0xBAADF00D:
-		case 0xBAAD0000:
-			return 0;
-		}
-	}
-	else
-	{
-		if(val==0xCCCCCCCCCCCCCCCC)
-			return 0;
-		if(val==0xFEEEFEEEFEEEFEEE)
-			return 0;
-		if(val==0xEEFEEEFEEEFEEEFE)
-			return 0;
-		if(val==0xCDCDCDCDCDCDCDCD)
-			return 0;
-		if(val==0xBAADF00DBAADF00D)
-			return 0;
-		if(val==0xADF00DBAADF00DBA)
-			return 0;
+	case 0:
+	case 0xCCCCCCCC:
+	case 0xFEEEFEEE:
+	case 0xEEFEEEFE:
+	case 0xCDCDCDCD:
+	case 0xFDFDFDFD:
+	case 0xBAAD0000:
+		return 0;
 	}
 	return 1;
 }
@@ -162,64 +128,78 @@ int				valid(const void *p)
 #define			ASSERT(SUCCESS)				((SUCCESS)!=0||runtime_error(__FILE__, __LINE__, #SUCCESS))
 #define			ASSERT_P(POINTER)			(valid(POINTER)||runtime_error(__FILE__, __LINE__, #POINTER " == 0"))
 
-
-//C array declaration
-#if 1
-#ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable:4200)//no default-constructor for struct with zero-length array
+#ifdef DEBUG_INFO_STR
+typedef const char *DebugInfo;
+#else
+typedef size_t DebugInfo;
 #endif
 typedef struct ArrayHeaderStruct
 {
 	size_t count, esize, cap;//cap is in bytes
-	void (*destructor)(void*);
-	unsigned char data[];
+	DebugInfo debug_info;
+	union
+	{
+		unsigned char data[];
+
+		char str[];
+	//	char i8data[];
+	//	unsigned short u16data[];
+	//	short i16data[];
+	//	unsigned u32data[];
+		int i32data[];
+	//	unsigned long long u64data[];
+	//	long long i64data[];
+	//	float f32data[];
+		double fdata[];
+	};
 } ArrayHeader, *ArrayHandle;
-typedef const ArrayHeader *ArrayConstHandle;
-#ifdef _MSC_VER
-#pragma warning(pop)
-#endif
-ArrayHandle		array_construct(const void *src, size_t esize, size_t count, size_t rep, size_t pad, void (*destructor)(void*));
-ArrayHandle		array_copy(ArrayHandle *arr);//shallow
-void			array_clear(ArrayHandle *arr);//keeps allocation
+ArrayHandle		array_construct(const void *src, size_t esize, size_t count, size_t rep, size_t pad, DebugInfo debug_info);
+ArrayHandle		array_copy(ArrayHandle *arr, DebugInfo debug_info);//shallow
 void			array_free(ArrayHandle *arr);
+void			array_clear(ArrayHandle *arr);//keeps allocation
 void			array_fit(ArrayHandle *arr, size_t pad);
 
-void*			array_insert(ArrayHandle *arr, size_t idx, const void *data, size_t count, size_t rep, size_t pad);//cannot be nullptr
-void*			array_erase(ArrayHandle *arr, size_t idx, size_t count);
-void*			array_replace(ArrayHandle *arr, size_t idx, size_t rem_count, const void *data, size_t ins_count, size_t rep, size_t pad);
+void*			array_insert(ArrayHandle *arr, size_t idx, void *data, size_t count, size_t rep, size_t pad);//cannot be nullptr
 
 size_t			array_size(ArrayHandle const *arr);
 void*			array_at(ArrayHandle *arr, size_t idx);
-const void*		array_at_const(ArrayConstHandle *arr, int idx);
+const void*		array_at_const(ArrayHandle const *arr, int idx);
 void*			array_back(ArrayHandle *arr);
 const void*		array_back_const(ArrayHandle const *arr);
 
-#define			ARRAY_ALLOC(ELEM_TYPE, ARR, DATA, COUNT, PAD, DESTRUCTOR)	ARR=array_construct(DATA, sizeof(ELEM_TYPE), COUNT, 1, PAD, DESTRUCTOR)
-#define			ARRAY_APPEND(ARR, DATA, COUNT, REP, PAD)					array_insert(&(ARR), (ARR)->count, DATA, COUNT, REP, PAD)
+#ifdef DEBUG_INFO_STR
+#define			ARRAY_ALLOC(ELEM_TYPE, NAME, COUNT, PAD, DEBUG_INFO)	NAME=array_construct(0, sizeof(ELEM_TYPE), COUNT, 1, PAD, DEBUG_INFO)
+#else
+#define			ARRAY_ALLOC(ELEM_TYPE, NAME, COUNT, PAD)	NAME=array_construct(0, sizeof(ELEM_TYPE), COUNT, 1, PAD, __LINE__)
+#endif
+#define			ARRAY_APPEND(ARR, DATA, COUNT, REP, PAD)	array_insert(&(ARR), array_size(&(ARR)), DATA, COUNT, REP, PAD)
 #define			ARRAY_DATA(ARR)			(ARR)->data
 #define			ARRAY_I(ARR, IDX)		*(int*)array_at(&ARR, IDX)
 #define			ARRAY_U(ARR, IDX)		*(unsigned*)array_at(&ARR, IDX)
 #define			ARRAY_F(ARR, IDX)		*(double*)array_at(&ARR, IDX)
 
 
-//null terminated array
-#define			ESTR_ALLOC(TYPE, STR, DATA, LEN)	STR=array_construct(DATA, sizeof(TYPE), LEN, 1, 1, 0)
-#define			STR_APPEND(STR, SRC, LEN, REP)		array_insert(&(STR), (STR)->count, SRC, LEN, REP, 1)
-#define			STR_FIT(STR)						array_fit(&STR, 1)
-#define			ESTR_AT(TYPE, STR, IDX)				*(TYPE*)array_at(&(STR), IDX)
-
-#define			STR_ALLOC(STR, LEN)				ESTR_ALLOC(char, STR, 0, LEN)
-#define			STR_COPY(STR, DATA, LEN)		ESTR_ALLOC(char, STR, DATA, LEN)
-#define			STR_AT(STR, IDX)				ESTR_AT(char, STR, IDX)
-
-#define			WSTR_ALLOC(STR, LEN)			ESTR_ALLOC(wchar_t, STR, 0, LEN)
-#define			WSTR_COPY(STR, DATA, LEN)		ESTR_ALLOC(wchar_t, STR, DATA, LEN)
-#define			WSTR_AT(STR, IDX)				ESTR_AT(wchar_t, STR, IDX)
+//String API (null terminated array)
+#ifdef DEBUG_INFO_STR
+#define			ESTR_ALLOC(TYPE, STR, LEN, DEBUG_INFO)				STR=array_construct(0, sizeof(TYPE), 0, 1, LEN+1, DEBUG_INFO)
+#define			ESTR_COPY(TYPE, STR, SRC, LEN, REP, DEBUG_INFO)		STR=array_construct(SRC, sizeof(TYPE), LEN, REP, 1, DEBUG_INFO)
+#else
+#define			ESTR_ALLOC(TYPE, STR, LEN)				STR=array_construct(0, sizeof(TYPE), 0, 1, LEN+1, __LINE__)
+#define			ESTR_COPY(TYPE, STR, SRC, LEN, REP)		STR=array_construct(SRC, sizeof(TYPE), LEN, REP, 1, __LINE__)
 #endif
+#define			STR_APPEND(STR, SRC, LEN, REP)			array_insert(&(STR), array_size(&(STR)), SRC, LEN, REP, 1)
+#define			STR_FIT(STR)							array_fit(&STR, 1)
+#define			ESTR_AT(TYPE, STR, IDX)					*(TYPE*)array_at(&(STR), IDX)
 
-//C array implementation
-#if 1
+#define			STR_ALLOC(STR, LEN, ...)				ESTR_ALLOC(char, STR, LEN, ##__VA_ARGS__)
+#define			STR_COPY(STR, SRC, LEN, REP, ...)		ESTR_COPY(char, STR, SRC, LEN, REP, ##__VA_ARGS__)
+#define			STR_AT(STR, IDX)						ESTR_AT(char, STR, IDX)
+
+#define			WSTR_ALLOC(STR, LEN, ...)				ESTR_ALLOC(wchar_t, STR, LEN, ##__VA_ARGS__)
+#define			WSTR_COPY(STR, SRC, LEN, REP, ...)		ESTR_COPY(wchar_t, STR, SRC, LEN, REP, ##__VA_ARGS__)
+#define			WSTR_AT(STR, IDX)						ESTR_AT(wchar_t, STR, IDX)
+
+//private
 static void		array_realloc(ArrayHandle *arr, size_t count, size_t pad)//CANNOT be nullptr, array must be initialized with array_alloc()
 {
 	ArrayHandle p2;
@@ -241,7 +221,7 @@ static void		array_realloc(ArrayHandle *arr, size_t count, size_t pad)//CANNOT b
 }
 
 //Array API
-ArrayHandle		array_construct(const void *src, size_t esize, size_t count, size_t rep, size_t pad, void (*destructor)(void*))
+ArrayHandle		array_construct(const void *src, size_t esize, size_t count, size_t rep, size_t pad, DebugInfo debug_info)
 {
 	ArrayHandle arr;
 	size_t srcsize, dstsize, cap;
@@ -254,20 +234,17 @@ ArrayHandle		array_construct(const void *src, size_t esize, size_t count, size_t
 	arr->count=count;
 	arr->esize=esize;
 	arr->cap=cap;
-	arr->destructor=destructor;
+	arr->debug_info=debug_info;
 	if(src)
 	{
 		ASSERT_P(src);
 		memfill(arr->data, src, dstsize, srcsize);
 	}
-	else
-		memset(arr->data, 0, dstsize);
-		
-	if(cap-dstsize>0)//zero pad
+	if(cap-dstsize>0)
 		memset(arr->data+dstsize, 0, cap-dstsize);
 	return arr;
 }
-ArrayHandle		array_copy(ArrayHandle *arr)
+ArrayHandle		array_copy(ArrayHandle *arr, DebugInfo debug_info)
 {
 	ArrayHandle a2;
 	size_t bytesize;
@@ -278,42 +255,20 @@ ArrayHandle		array_copy(ArrayHandle *arr)
 	a2=(ArrayHandle)malloc(bytesize);
 	ASSERT_P(a2);
 	memcpy(a2, *arr, bytesize);
+	a2->debug_info=debug_info;
 	return a2;
+}
+void			array_free(ArrayHandle *arr)//can be nullptr
+{
+	free(*arr);
+	*arr=0;
 }
 void			array_clear(ArrayHandle *arr)//can be nullptr
 {
 	if(*arr)
-	{
-		if(arr[0]->destructor)
-		{
-			for(size_t k=0;k<arr[0]->count;++k)
-				arr[0]->destructor(array_at(arr, k));
-		}
 		arr[0]->count=0;
-	}
 }
-void			array_free(ArrayHandle *arr)//can be nullptr
-{
-	if(*arr&&arr[0]->destructor)
-	{
-		for(size_t k=0;k<arr[0]->count;++k)
-			arr[0]->destructor(array_at(arr, k));
-	}
-	free(*arr);
-	*arr=0;
-}
-void			array_fit(ArrayHandle *arr, size_t pad)//can be nullptr
-{
-	ArrayHandle p2;
-	if(!*arr)
-		return;
-	arr[0]->cap=(arr[0]->count+pad)*arr[0]->esize;
-	p2=(ArrayHandle)realloc(*arr, sizeof(ArrayHeader)+arr[0]->cap);
-	ASSERT_P(p2);
-	*arr=p2;
-}
-
-void*			array_insert(ArrayHandle *arr, size_t idx, const void *data, size_t count, size_t rep, size_t pad)//cannot be nullptr
+void*			array_insert(ArrayHandle *arr, size_t idx, void *data, size_t count, size_t rep, size_t pad)
 {
 	size_t start, srcsize, dstsize, movesize;
 	
@@ -330,66 +285,16 @@ void*			array_insert(ArrayHandle *arr, size_t idx, const void *data, size_t coun
 		memset(arr[0]->data+start, 0, dstsize);
 	return arr[0]->data+start;
 }
-void*			array_erase(ArrayHandle *arr, size_t idx, size_t count)
+void			array_fit(ArrayHandle *arr, size_t pad)//can be nullptr
 {
-	size_t k;
-
-	ASSERT_P(*arr);
-	if(arr[0]->count<idx+count)
-	{
-		LOG_ERROR("array_erase() out of bounds: idx=%lld count=%lld size=%lld", (long long)idx, (long long)count, (long long)arr[0]->count);
-		if(arr[0]->count<idx)
-			return 0;
-		count=arr[0]->count-idx;//erase till end of array if just idx+count is OOB
-	}
-	if(arr[0]->destructor)
-	{
-		for(k=0;k<count;++k)
-			arr[0]->destructor(array_at(arr, idx+k));
-	}
-	memmove(arr[0]->data+idx*arr[0]->esize, arr[0]->data+(idx+count)*arr[0]->esize, (arr[0]->count-(idx+count))*arr[0]->esize);
-	arr[0]->count-=count;
-	return arr[0]->data+idx*arr[0]->esize;
+	ArrayHandle p2;
+	if(!*arr)
+		return;
+	arr[0]->cap=(arr[0]->count+pad)*arr[0]->esize;
+	p2=(ArrayHandle)realloc(*arr, sizeof(ArrayHeader)+arr[0]->cap);
+	ASSERT_P(p2);
+	*arr=p2;
 }
-void*			array_replace(ArrayHandle *arr, size_t idx, size_t rem_count, const void *data, size_t ins_count, size_t rep, size_t pad)
-{
-	size_t k, c0, c1, start, srcsize, dstsize;
-
-	ASSERT_P(*arr);
-	if(arr[0]->count<idx+rem_count)
-	{
-		LOG_ERROR("array_replace() out of bounds: idx=%lld rem_count=%lld size=%lld ins_count=%lld", (long long)idx, (long long)rem_count, (long long)arr[0]->count, (long long)ins_count);
-		if(arr[0]->count<idx)
-			return 0;
-		rem_count=arr[0]->count-idx;//erase till end of array if just idx+count is OOB
-	}
-	if(arr[0]->destructor)
-	{
-		for(k=0;k<rem_count;++k)//destroy removed objects
-			arr[0]->destructor(array_at(arr, idx+k));
-	}
-	start=idx*arr[0]->esize;
-	srcsize=ins_count*arr[0]->esize;
-	dstsize=rep*srcsize;
-	c0=arr[0]->count;//copy original count
-	c1=arr[0]->count+rep*ins_count-rem_count;//calculate new count
-
-	if(ins_count!=rem_count||(c1+pad)*arr[0]->esize>arr[0]->cap)//resize array
-		array_realloc(arr, c1, pad);
-
-	if(ins_count!=rem_count)//shift objects
-		memmove(arr[0]->data+(idx+ins_count)*arr[0]->esize, arr[0]->data+(idx+rem_count)*arr[0]->esize, (c0-(idx+rem_count))*arr[0]->esize);
-
-	if(dstsize)//initialize inserted range
-	{
-		if(data)
-			memfill(arr[0]->data+start, data, dstsize, srcsize);
-		else
-			memset(arr[0]->data+start, 0, dstsize);
-	}
-	return arr[0]->data+start;//return start of inserted range
-}
-
 size_t			array_size(ArrayHandle const *arr)//can be nullptr
 {
 	if(!arr[0])
@@ -404,7 +309,7 @@ void*			array_at(ArrayHandle *arr, size_t idx)
 		return 0;
 	return arr[0]->data+idx*arr[0]->esize;
 }
-const void*		array_at_const(ArrayConstHandle *arr, int idx)
+const void*		array_at_const(ArrayHandle const *arr, int idx)
 {
 	if(!arr[0])
 		return 0;
@@ -422,10 +327,7 @@ const void*		array_back_const(ArrayHandle const *arr)
 		return 0;
 	return arr[0]->data+(arr[0]->count-1)*arr[0]->esize;
 }
-#endif
 
-
-//optics simulator
 typedef struct PointStruct
 {
 	double x, y;
@@ -433,156 +335,17 @@ typedef struct PointStruct
 typedef struct PathStruct
 {
 	int emerged;
-	ArrayHandle points;//array of Point struct
+	ArrayHandle points;
 	double r_blur;
 	Point em_ray[2];//emergence ray
 } Path;
-void			free_path(void *data)
-{
-	Path *path=(Path*)data;
-	array_free(&path->points);
-}
 typedef struct PhotonStruct
 {
 	double lambda;//nm
 	int color;
-	ArrayHandle paths;//array of Path struct
+	ArrayHandle paths;
 	Point ground[2], em_centroid;
 } Photon;
-void			free_photon(void *data)
-{
-	Photon *ph=(Photon*)data;
-	array_free(&ph->paths);
-}
-
-#if 0
-typedef struct SurfaceRangeStruct
-{
-	double r_max;
-	int type;
-} SurfaceRange;
-#endif
-
-typedef enum OpticElemStateEnum
-{
-	STATE_NONE,
-	STATE_MIRROR,
-	STATE_ACTIVE,
-} OpticElemState;
-typedef enum SurfaceTypeEnum
-{
-	SURF_HOLE,
-	SURF_TRANSP,
-	SURF_MIRROR,
-} SurfaceType;
-#if 0
-typedef struct SurfaceRangeStruct
-{
-	SurfaceType type;
-	double r_max;
-} SurfaceRange;
-typedef struct BoundaryStruct
-{
-	double curv_radius;
-	int nranges;//can only be 1 or 2
-	SurfaceType type[2];
-	double r_max[2];
-	//SurfaceRange ranges[2];
-} Boundary;
-#endif
-typedef struct SurfaceStruct
-{
-	double
-		pos,	//the x-distance of surface center from origin
-		radius;	//looking LtR: -ve means concave, +ve means convex, zero or +-inf means planar
-
-	//the surface is always divided into {inner circle, outer donut}
-	SurfaceType type[2];
-	double r_max[2];//only the outer donut can have zero radius difference
-} Surface;
-typedef struct OpticElemStruct
-{
-	OpticElemState active;
-	ArrayHandle name;	//string
-	double n;			//refractive index
-	Surface surfaces[2];//{left, right}		right radius is negated when parsing input
-
-#if 0
-	ArrayHandle name;//string
-	OpticElemState active;
-	double n;	//refractive index
-
-	//{left, right}
-	double
-		pos[2],	//x-distance of surface center from origin
-		curv_radius[2];//surface radii
-	
-	//{left.lo, right.lo, left.hi, right.hi}
-	SurfaceType type[4];
-	double r_max[4];
-#endif
-
-#if 0
-	OpticElemState active;
-	double
-		pos,	//x-distance from origin
-		th,		//thickness at center
-		n;		//refractive index
-	double curv_radius[2];//{left, right} surface radii
-	//int nranges[2];//{left, right} range count can only be 1 or 2
-	SurfaceType type[4];
-	double r_max[4];
-	//Boundary profiles[2];
-	ArrayHandle name;//string
-#endif
-	
-#if 0
-	double
-		pos,	//x-distance from origin
-		rL,		//left surface radius
-		th,		//thickness at center
-		rR,		//right surface radius
-		n;		//refractive index
-		rH;		//element vertical radius (aperture)
-	ArrayHandle
-		name,//string
-		profile_left, profile_right;//array of doubles: negative r[1] means mirror between r[0] and r[1]
-#endif
-} OpticElem;//no automatic destructor
-typedef struct AreaIdxStruct
-{
-	short e_idx;
-	char is_right_not_left, is_outer_not_inner;
-} AreaIdx;
-#if 0
-typedef struct BoundaryStruct
-{
-	int active, obj_id;
-	double
-		x_pos,
-		r_surface,	//surface curvature radius
-		r_in,		//donut inner radius
-		r_out,		//donut outer radius
-		nL, nR;		//refractive index: if zero then mirror
-} Boundary;
-#endif
-
-
-//globals
-int				current_elem=0;
-ArrayHandle		elements=0, ebackup=0,//arrays of OpticElem
-				order=0,//array of AreaIdx
-				photons=0;//array of Photon
-AreaIdx			initial_target={0};
-int				nwavelengths=3, nrays=10;
-double			tan_tilt=0,//rays tilt
-				total_blur=0,
-				spread=0;//main loss value
-
-ArrayHandle		ray_spread_mean=0;//array of Point, an extra last element is centroid
-double			*history=0;
-int				hist_idx=0, history_enabled=1;
-
 
 #if 1
 typedef struct LambdaColorStruct
@@ -726,111 +489,35 @@ double			lambda2n(double n_base, double lambda)
 	//return 1.60+(1.54-1.60)/(800-300)*(lambda-300);
 }
 #endif
-
-#if 0
 #define			PH_COUNT	3
-Photon			lightpaths[PH_COUNT]={{470}, {550}, {640}};//a photon of same color can take many paths, a path may or may not emerge on CCD
-//const int		n_count=SIZEOF(lightpaths);
+Photon			lightpaths[PH_COUNT]={{470}, {550}, {640}};//a photon can take many paths, a path may or may not emerge on CCD
+//double		n_base=1.512;//refractive index of float glass
+//typedef struct ColorStruct
+//{
+//	double lambda, n_delta;
+//} Color;
+//Color			rays[PH_COUNT]=
+//{
+//	{493.63,  0.0035},//blue->red
+//	{569.26,  0.001},
+//	{630.30, -0.001},
+//};
+const int		n_count=SIZEOF(lightpaths);
 double			total_blur=0;
 //double		lambda0=0, lambda=590;//565nm
-int				twosides=1;//simulate rays above and below x-axis
+int				twosides=1;
+
+Point			ray_spread_mean[PH_COUNT+1]={0};//last element is centroid
+double			*history=0;
+int				hist_idx=0, history_enabled=1;
 
 int				nrays=5;
 double			tan_tilt=0;
 double			ap=12, ap0=12;//aperture
 double			spread=0;
-#endif
 
-ArrayHandle		load_text(const char *filename, int pad)
-{
-	struct stat info={0};
-	FILE *f;
-	ArrayHandle str;
-
-	int error=stat(filename, &info);
-	if(error)
-	{
-		strerror_s(g_buf, G_BUF_SIZE, errno);
-		LOG_ERROR("Cannot open %s\n%s", filename, g_buf);
-		return 0;
-	}
-	fopen_s(&f, filename, "r");
-	//f=fopen(filename, "r");
-	//f=fopen(filename, "rb");
-	//f=fopen(filename, "r, ccs=UTF-8");//gets converted to UTF-16 on Windows
-
-	str=array_construct(0, 1, info.st_size, 1, pad+1, 0);
-	str->count=fread(str->data, 1, info.st_size, f);
-	fclose(f);
-	memset(str->data+str->count, 0, str->cap-str->count);
-	return str;
-}
-int				skip_ws(ArrayHandle text, int idx)
-{
-	for(;idx<(int)text->count;)
-	{
-		if(text->data[idx]=='/')
-		{
-			if(text->data[idx+1]=='/')//line comment
-			{
-			}
-			else if(text->data[idx+1]=='*')//block comment
-			{
-			}
-		}
-	}
-}
-int				match_kw(ArrayHandle text, int idx, const char **kw, int nkw)
-{
-}
-int				open_system()
-{
-	ArrayHandle text;
-
-	g_buf[0]=0;
-	OPENFILENAMEA ofn=
-	{
-		sizeof(OPENFILENAMEA),
-		ghWnd, ghInstance,
-		"Text Files (.txt)\0*.txt\0",//filter
-		0, 0,//custom filter
-		1,//filter idx
-		g_buf, G_BUF_SIZE,//filename
-		0, 0,//filetitle
-		0,//initial directory (default)
-		0,//dialog title
-		OFN_CREATEPROMPT|OFN_PATHMUSTEXIST,//flags
-		0,//file offset
-		0,//extension offset
-		"txt",//default extension
-		0, 0,//data & hook
-		0,//template name
-		0,//reserved
-		0,//reserved
-		0,//flags ex
-	};
-	int success=GetOpenFileNameA(&ofn);
-	if(!success)
-		return 0;
-
-	text=load_text(ofn.lpstrFile, 16);
-	if(!text)
-		return 0;
-
-
-
-	array_free(&text);
-	return success;
-}
-
-int		sgn_star(double x){return 1-((x<0)<<1);}//assumes zero is positive
+int		sgn_star(double x){return 1-((x<0)<<1);}
 int		sgn_int(int n){return (n>0)-(n<0);}
-void	normalize(double dx, double dy, Point *ret)
-{
-	double invhyp=1/sqrt(dx*dx+dy*dy);
-	ret->x=dx*invhyp;
-	ret->y=dy*invhyp;
-}
 int		intersect_line_circle(double x1, double y1, double x2, double y2, double cx, double R, Point *ret_points)//https://mathworld.wolfram.com/Circle-LineIntersection.html
 {
 	double dx=x2-x1, dy=y2-y1, dr=sqrt(dx*dx+dy*dy);
@@ -855,37 +542,12 @@ int		intersect_line_circle(double x1, double y1, double x2, double y2, double cx
 	}
 	return 0;
 }
-int		intersect_ray_surface(double x1, double y1, double x2, double y2, double ap_min, double ap_max, double x, double R, Point *ret_point)//returns first future hit (if any), where (x1, y1) is in present
+void	normalize(double dx, double dy, Point *ret)
 {
-	int hit;
-	Point sol[2];
-
-	if(R!=R||!R||fabs(R)==_HUGE)//plane at x
-	{
-		if(x1==x2)
-			return 0;
-		ret_point->x=x;
-		ret_point->y=y1+(y2-y1)/(x2-x1)*(x-x1);
-	}
-	else
-	{
-		double xcenter=x+R;
-		hit=intersect_line_circle(x1, y1, x2, y2, xcenter, R, sol);
-		if(hit)
-		{
-			int second=(R>0)==(sol[0].x<sol[1].x);//convex from left XNOR sol0 is leftmost
-			*ret_point=sol[second];
-		}
-	}
-	if(hit)
-	{
-		double abs_y=fabs(ret_point->y);
-		hit=(x1==ret_point->x||(x1<x2)==(x1<ret_point->x))
-			&&abs_y>=ap_min&&abs_y<ap_max;//intersection is in the future and inside aperture
-	}
-	return hit;
+	double invhyp=1/sqrt(dx*dx+dy*dy);
+	ret->x=dx*invhyp;
+	ret->y=dy*invhyp;
 }
-
 int		refract(double n_before, double n_after, double sin_in, double *cos_em, double *sin_em)
 {
 	double temp=n_before*sin_in;
@@ -902,40 +564,66 @@ int		refract(double n_before, double n_after, double sin_in, double *cos_em, dou
 	}
 	return reflection;
 }
-int		refract_ray_surface(double x1, double y1, double x2, double y2, double ap_min, double ap_max, double nL, double nR, double x, double R, Point *ret_line)//(x1, y1) is in present
+int		refract_ray_surface(double x1, double y1, double x2, double y2, double aperture, double nL, double nR, double x, double R, Point *ret_line)
 {
-	int hit;
-	Point p[2];
+	int hit=0;
+	Point sol[2];
 	double sin_in, sin_em, cos_em;
-
-	hit=intersect_ray_surface(x1, y1, x2, y2, ap_min, ap_max, x, R, ret_line);
-	if(!hit)
+	if(x2==x1)
 		return 0;
-
+	if(x2<x1)
+	{
+		double temp;
+		temp=x1, x1=x2, x2=temp;
+		temp=y1, y1=y2, y2=temp;
+	}
 	if(!R||fabs(R)==_HUGE)//plane at x
 	{
-		normalize(x2-x1, y2-y1, p);
-		sin_in=p->y;
-		hit+=refract(nL, nR, sin_in, &cos_em, &sin_em);
-		ret_line[1].x=ret_line[0].x+cos_em;
-		ret_line[1].y=ret_line[0].y+sin_em;
+		ret_line[0].x=x;
+		ret_line[0].y=y1+(y2-y1)/(x2-x1)*(x-x1);
+		hit=fabs(ret_line[0].y)<aperture;
+		if(hit)
+		{
+			normalize(x2-x1, y2-y1, sol);
+			sin_in=sol->y;
+			hit+=refract(nL, nR, sin_in, &cos_em, &sin_em);
+			ret_line[1].x=ret_line[0].x+cos_em;
+			ret_line[1].y=ret_line[0].y+sin_em;
+		}
 	}
 	else//+/- spherical at x
 	{
 		double xcenter=x+R;
-
-		int inc_dir=sgn_star(x2-x1);
-		normalize(x2-x1, y2-y1, p);
-		normalize(sgn_star(R)*(xcenter-ret_line[0].x), -sgn_star(R)*ret_line[0].y, p+1);
-		sin_in=p[0].y*p[1].x-p[0].x*p[1].y;
-		hit+=refract(nL, nR, sin_in, &cos_em, &sin_em);
-		double
-			c2=cos_em*p[1].x-sin_em*p[1].y,
-			s2=sin_em*p[1].x+cos_em*p[1].y;
-		if(hit!=2&&inc_dir!=sgn_star(c2))
-			c2=-c2, s2=-s2;
-		ret_line[1].x=ret_line[0].x+c2;
-		ret_line[1].y=ret_line[0].y+s2;
+		hit=intersect_line_circle(x1, y1, x2, y2, xcenter, R, sol);
+		if(hit)
+		{
+			if((R>0)==(sol[0].x<sol[1].x))//convex from left XNOR sol0 is leftmost
+			{
+				ret_line[0].x=sol[0].x;
+				ret_line[0].y=sol[0].y;
+			}
+			else//convex from left XOR sol0 is leftmost
+			{
+				ret_line[0].x=sol[1].x;
+				ret_line[0].y=sol[1].y;
+			}
+			hit=fabs(ret_line[0].y)<aperture*0.5;
+			if(hit)
+			{
+				int inc_dir=sgn_star(x2-x1);
+				normalize(x2-x1, y2-y1, sol);
+				normalize(sgn_star(R)*(xcenter-ret_line[0].x), -sgn_star(R)*ret_line[0].y, sol+1);
+				sin_in=sol[0].y*sol[1].x-sol[0].x*sol[1].y;
+				hit+=refract(nL, nR, sin_in, &cos_em, &sin_em);
+				double
+					c2=cos_em*sol[1].x-sin_em*sol[1].y,
+					s2=sin_em*sol[1].x+cos_em*sol[1].y;
+				if(hit!=2&&inc_dir!=sgn_star(c2))
+					c2=-c2, s2=-s2;
+				ret_line[1].x=ret_line[0].x+c2;
+				ret_line[1].y=ret_line[0].y+s2;
+			}
+		}
 	}
 	return hit;
 }
@@ -1006,7 +694,6 @@ void	meanvar(double *arr, int count, int stride, double *ret_mean, double *ret_v
 		*ret_var=var;
 }
 
-#if 0
 typedef struct GlassElemStruct
 {
 	int active;
@@ -1039,137 +726,26 @@ GlassElem		elements[]=
 };
 GlassElem		*ebackup=0;
 int				ecount=SIZEOF(elements), current_elem=0;
-#endif
-
-
-void			simulate()//number of rays must be even, always double-sided
+int				shift_lambdas(double delta)
 {
-	if(!elements||!elements->count)
+	double min_lambda=lightpaths[0].lambda, max_lambda=lightpaths[0].lambda;
+	for(int kp=1;kp<PH_COUNT;++kp)
 	{
-		LOG_ERROR("Elements array is empty");//optical device unknown
-		return;
+		if(min_lambda>lightpaths[kp].lambda)
+			min_lambda=lightpaths[kp].lambda;
+		if(max_lambda<lightpaths[kp].lambda)
+			max_lambda=lightpaths[kp].lambda;
 	}
-	if(!photons||!photons->count)
+	if(min_lambda+delta<380||max_lambda+delta>750)
+		return 0;
+	for(int kp=0;kp<PH_COUNT;++kp)
 	{
-		LOG_ERROR("Photon array is empty");//colors unknown
-		return;
+		Photon *lp=lightpaths+kp;
+		lp->lambda+=delta;
+		lp->color=wavelength2rgb(lp->lambda);
 	}
-	if(!order||!order->count)
-	{
-		LOG_ERROR("Order path array is empty");//device operation unknown
-		return;
-	}
-	
-	//naive collision detection
-#if 0
-	for(int ke=0;ke<elements->count;++ke)
-	{
-		OpticElem *e1=(OpticElem*)array_at(&elements, ke);
-		for(int ke2=0;ke2<elements->count;++ke2)
-		{
-			OpticElem *e2=(OpticElem*)array_at(&elements, ke2);
-			double xmin=e1->left.pos, xmax=e1->right.pos;
-			if(xmin>e2->left.pos)
-				xmin=e2->left.pos;
-			if(xmin<e2->right.pos)
-				xmin=e2->right.pos;
-			if(e2-e1<e1->right.pos-e1->left.pos+e2->right.pos-e2->left.pos)
-			{
-				LOG_ERROR("Inconsistent device: element \'%s\' intersects with element \'%s\'", e1->name->data, e2->name->data);
-				return;
-			}
-		}
-	}
-#endif
-	
-	//find first element
-#if 0
-	int e1_idx=0;
-	OpticElem *e1=(OpticElem*)array_at(&elements, e1_idx);
-	for(int ke=1;ke<elements->count;++ke)
-	{
-		OpticElem *e2=(OpticElem*)array_at(&elements, ke);
-		if(e1->left.pos>e2->left.pos)//naive left surface center comparison
-		{
-			e1_idx=ke;
-			e1=(OpticElem*)array_at(&elements, e1_idx);
-		}
-	}
-#endif
-	
-	//find rays range (from the target)
-	double ymin, ymax;
-	OpticElem *e1=(OpticElem*)array_at(&elements, initial_target.e_idx);
-	Surface *surface=e1->surfaces+initial_target.is_right_not_left;
-	if(initial_target.is_outer_not_inner)//is outer area
-	{
-		ymin=surface->r_max[0];
-		ymax=surface->r_max[1];
-	}
-	else//is inner area
-	{
-		ymin=0;
-		ymax=surface->r_max[0];
-	}
-
-	//find x range of optical device
-	double xmin, xmax;
-	e1=(OpticElem*)array_at(&elements, 0);
-	xmin=e1->surfaces[0].pos;
-	xmax=e1->surfaces[1].pos;
-	for(int ke=1;ke<(int)elements->count;++ke)
-	{
-		e1=(OpticElem*)array_at(&elements, ke);
-		if(xmin>e1->surfaces[0].pos)
-			xmin=e1->surfaces[0].pos;
-		if(xmax<e1->surfaces[1].pos)
-			xmax=e1->surfaces[1].pos;
-	}
-	double xlength=xmax-xmin, xstart=xmin-xlength;
-
-	//initialize incident rays
-	AreaIdx *aidx=(AreaIdx*)array_at(&order, 0);
-	//double r_sign=aidx->is_right_not_left?-1:1;
-	e1=(OpticElem*)array_at(&elements, aidx->e_idx);
-	surface=e1->surfaces+aidx->is_right_not_left;
-	for(int kp=0;kp<(int)photons->count;++kp)
-	{
-		Photon *ph=(Photon*)array_at(&photons, kp);
-		for(int kp2=0;kp2<(int)ph->paths->count;++kp2)//for each ray	path->count must be even
-		{
-			Path *path=(Path*)array_at(&ph->paths, kp2);
-			array_clear(&path->points);
-			Point *points=ARRAY_APPEND(path->points, 0, 2, 1, 0);
-			points->x=xstart;
-			points->y=ymin+(kp2>>1)*(ymax-ymin)/(ph->paths->count>>1)+0.5;
-			if(kp2&1)//rays are in pairs mirrored by ground line
-				points->y=-points->y;
-			intersect_ray_surface(xstart, points->y, xstart+xlength, points->y, ymin, ymax, surface->pos, surface->radius, points+1);//must hit
-		}
-	}
-
-	//main simulation loop
-	for(int ke=0;ke<(int)order->count;++ke)
-	{
-		e1=(OpticElem*)array_at(&elements, ke);
-		for(int kp=0;kp<(int)photons->count;++kp)
-		{
-			Photon *ph=(Photon*)array_at(&photons, kp);
-			for(int kp2=0;kp2<(int)ph->paths->count;++kp2)//for each ray
-			{
-				Path *path=(Path*)array_at(&ph->paths, kp2);
-				//for(int ke=0;ke<(int)elements->count;++ke)//for each boundary
-				//{
-				//	OpticElem *elem=(OpticElem*)array_at(&elements, ke);
-				//	if(elem->active)
-				//	{
-				//	}
-				//}
-			}
-		}
-	}
+	return 1;
 }
-#if 0
 double			eval(GlassElem *elements, int ge_count, int nrays, int n_count, double aperture, double xend, double tan_tilt)
 {
 	Point l1[2], l2[2];
@@ -1378,7 +954,6 @@ double			eval(GlassElem *elements, int ge_count, int nrays, int n_count, double 
 	return abs_stddev;
 }
 #define	EVAL()	spread=eval(elements, ecount, nrays, n_count, ap, 300, tan_tilt)
-#endif
 double			calc_loss()
 {
 	return spread;
@@ -1386,40 +961,6 @@ double			calc_loss()
 	//double focal_length=100;
 	//focal_length-=ray_spread_mean[n_count>>1];
 	//return spread+focal_length*focal_length;
-}
-int				shift_lambdas(double delta)
-{
-	if(!photons||!photons->count)
-	{
-		LOG_ERROR("Photons array is empty");
-		return 0;
-	}
-	Photon *ph=(Photon*)array_at(&photons, 0);
-	double min_lambda=ph->lambda, max_lambda=ph->lambda;
-	for(int kp=1;kp<(int)photons->count;++kp)
-	{
-		ph=(Photon*)array_at(&photons, kp);
-		if(min_lambda>ph->lambda)
-			min_lambda=ph->lambda;
-		if(max_lambda<ph->lambda)
-			max_lambda=ph->lambda;
-	}
-	if(min_lambda+delta<380||max_lambda+delta>750)
-		return 0;
-	for(int kp=0;kp<(int)photons->count;++kp)
-	{
-		ph=(Photon*)array_at(&photons, kp);
-		ph->lambda+=delta;
-		ph->color=wavelength2rgb(ph->lambda);
-	}
-	return 1;
-}
-void			change_aperture(Surface *surface, double delta)
-{
-	int same=surface->r_max[0]==surface->r_max[1];
-	surface->r_max[1]+=delta;
-	if(same)
-		surface->r_max[0]=surface->r_max[1];
 }
 void			change_diopter(double *r, double delta)
 {
@@ -1434,39 +975,41 @@ void			change_n(double *n, double delta)
 		return;
 	*n+=delta;
 }
-void			change_var(OpticElem *oe, int idx, double delta)
+void			change_var(GlassElem *ge, int idx, double delta)
 {
-	//idx: {left.pos, left.radius, right.pos, right.radius}
-	Surface *s=oe->surfaces+(idx>>1);
-	if(idx&1)
-		change_diopter(&s->radius, delta);
-	else
-		s->pos+=delta;
+	switch(idx)
+	{
+	case 0:case 2:
+		ge->vars[idx]+=delta;
+		break;
+	case 1:case 3:
+		change_diopter(ge->vars+idx, delta);
+		break;
+	}
 }
 void			calc_grad(double *grad, double step, int *var_idx, int nvars, int exclude_elem)
 {
 	history_enabled=0;
-	memset(grad, 0, elements->count*nvars*sizeof(double));
-	for(int ke=exclude_elem;ke<(int)elements->count;++ke)
+	memset(grad, 0, ecount*nvars*sizeof(double));
+	for(int ke=exclude_elem;ke<ecount;++ke)
 	{
-		OpticElem *ge=(OpticElem*)array_at(&elements, ke);
+		GlassElem *ge=elements+ke;
 		if(ge->active)
 		{
 			for(int kv=0;kv<nvars;++kv)
 			{
 				change_var(ge, var_idx[kv], step);
-				simulate();
+				EVAL();
 				change_var(ge, var_idx[kv], -step);
 				grad[nvars*ke+kv]=calc_loss();
 			}
 		}
 	}
-	simulate();
+	EVAL();
 	double loss=calc_loss();
-	for(int ke=exclude_elem;ke<(int)elements->count;++ke)
+	for(int ke=exclude_elem;ke<ecount;++ke)
 	{
-		OpticElem *oe=(OpticElem*)array_at(&elements, ke);
-		if(oe->active)
+		if(elements[ke].active)
 		{
 			for(int kv=0;kv<nvars;++kv)
 				grad[nvars*ke+kv]-=loss;
@@ -1476,9 +1019,9 @@ void			calc_grad(double *grad, double step, int *var_idx, int nvars, int exclude
 }
 void			update_params(double *grad, int *var_idx, int nvars, int exclude_elem)
 {
-	for(int ke=exclude_elem;ke<(int)elements->count;++ke)
+	for(int ke=exclude_elem;ke<ecount;++ke)
 	{
-		OpticElem *ge=(OpticElem*)array_at(&elements, ke);
+		GlassElem *ge=elements+ke;
 		if(ge->active)
 		{
 			for(int kv=0;kv<nvars;++kv)
@@ -1589,9 +1132,9 @@ void			render()
 			}
 			hPen=(HPEN)SelectObject(ghMemDC, hPen), hBrush=(HBRUSH)SelectObject(ghMemDC, hBrush);
 		}
-		for(int kn=0;kn<(int)photons->count;++kn)				//draw light paths
+		for(int kn=0;kn<n_count;++kn)				//draw light paths
 		{
-			Photon *lp=(Photon*)array_at(&photons, kn);
+			Photon *lp=lightpaths+kn;
 			HPEN hPenRay=CreatePen(PS_SOLID, 1, lp->color);
 			hPenRay=(HPEN)SelectObject(ghMemDC, hPenRay);
 			for(int kp=0, npaths=array_size(&lp->paths);kp<npaths;++kp)
@@ -1607,24 +1150,27 @@ void			render()
 
 		hPenLens=(HPEN)SelectObject(ghMemDC, hPenLens);
 		int segments=25;
-		double topx1, topx2;
-		for(int ke=0;ke<(int)elements->count;++ke)			//draw optical elements
+		double x=0, yreach=ap*0.5, topx1=0, topx2=0;
+		for(int k=0;k<ecount;++k)					//draw glass elements
 		{
-			OpticElem *oe=(OpticElem*)array_at(&elements, ke);
-			if(oe->active)
+			GlassElem *ge=elements+k;
+			x+=ge->dist;
+			if(ge->active)
+				topx1=draw_arc(x, ge->Rl, ap, scale, segments);
+			x+=ge->th;
+			if(ge->active)
 			{
-				topx1=draw_arc(oe->surfaces[0].pos, oe->surfaces[0].radius, oe->surfaces[0].r_max[1], scale, segments);
-				topx2=draw_arc(oe->surfaces[1].pos, oe->surfaces[1].radius, oe->surfaces[1].r_max[1], scale, segments);
-				draw_line(topx1, oe->surfaces[0].r_max[1], topx2, oe->surfaces[1].r_max[1], scale);
-				draw_line(topx1, -oe->surfaces[0].r_max[1], topx2, -oe->surfaces[1].r_max[1], scale);
+				topx2=draw_arc(x, -ge->Rr, ap, scale, segments);
+				draw_line(topx1, yreach, topx2, yreach, scale);
+				draw_line(topx1, -yreach, topx2, -yreach, scale);
 			}
 		}
 		hPenLens=(HPEN)SelectObject(ghMemDC, hPenLens);
 		
 		hBrushHollow=(HBRUSH)SelectObject(ghMemDC, hBrushHollow);
-		for(int kn=0;kn<(int)photons->count;++kn)				//draw blur circles
+		for(int kn=0;kn<n_count;++kn)				//draw blur circles
 		{
-			Photon *lp=(Photon*)array_at(&photons, kn);
+			Photon *lp=lightpaths+kn;
 			int npaths=array_size(&lp->paths);
 			int xcenter=real2screenX(lp->em_centroid.x, scale),
 				ycenter=real2screenY(lp->em_centroid.y, scale);
@@ -1644,9 +1190,8 @@ void			render()
 			DeleteObject(tempPen);
 		}
 		{
-			Point *point=(Point*)array_back(&ray_spread_mean);
-			int xcenter=real2screenX(point->x, scale),
-				ycenter=real2screenY(point->y, scale);
+			int xcenter=real2screenX(ray_spread_mean[n_count].x, scale),
+				ycenter=real2screenY(ray_spread_mean[n_count].y, scale);
 			int rx=(int)(total_blur*Xr), ry=(int)(total_blur*Yr);
 			Ellipse(ghMemDC, xcenter-rx, ycenter-ry, xcenter+rx, ycenter+ry);//combined blur circle
 		}
@@ -1695,9 +1240,9 @@ void			render()
 			MoveToEx(ghMemDC, 0, H, 0), LineTo(ghMemDC, w, H), MoveToEx(ghMemDC, V, 0, 0), LineTo(ghMemDC, V, h);
 			SetBkMode(ghMemDC, bkMode);
 
-			for(int k=0;k<(int)photons->count;++k)//draw ray ground
+			for(int k=0;k<n_count;++k)//draw ray ground
 			{
-				Photon *lp=(Photon*)array_at(&photons, k);
+				Photon *lp=lightpaths+k;
 				MoveToEx(ghMemDC, real2screenX(lp->ground[0].x, scale), real2screenY(lp->ground[0].y, scale), 0);
 				LineTo(ghMemDC, real2screenX(lp->ground[1].x, scale), real2screenY(lp->ground[1].y, scale));
 			}
@@ -1716,27 +1261,20 @@ void			render()
 			GUITPrint(ghMemDC, 0, y, 0, "O\t\toptimize"), y+=48;
 
 			GUITPrint(ghMemDC, 0, y, 0, "\t1 dist\t2 Rl\t3 Th\t4 Rr\t5 n"), y+=32;
-			for(int ke=0;ke<(int)elements->count;++ke)
-			{
-				OpticElem *oe=(OpticElem*)array_at(&elements, ke);
-				double th=oe->surfaces[1].pos-oe->surfaces[0].pos;
-				GUITPrint(ghMemDC, 0, y, 0, "%s  %c: %c\t%g\t%g\t%g\t%g\t%g%s", current_elem==ke?"->":" ", 'A'+ke, oe->active?'V':'X', oe->surfaces[0].pos, oe->surfaces[0].radius, th, -oe->surfaces[1].radius, oe->n, current_elem==ke?"\t<-":""), y+=16;
-			}
-			Point *point=(Point*)array_at(&ray_spread_mean, (int)photons->count);
+			for(int k=0;k<ecount;++k)
+				GUITPrint(ghMemDC, 0, y, 0, "%s  %c: %c\t%g\t%g\t%g\t%g\t%g\t%s", current_elem==k?"->":" ", 'A'+k, elements[k].active?'V':'X', elements[k].dist, elements[k].Rl, elements[k].th, elements[k].Rr, elements[k].n, current_elem==k?"<-":""), y+=16;
+			Point *point=ray_spread_mean+n_count;
 			double focus=sqrt(point->x*point->x+point->y*point->y);
-			AreaIdx *aidx=(AreaIdx*)array_at(&order, 0);
-			OpticElem *oe=(OpticElem*)array_at(&elements, aidx->e_idx);
-			double ap=oe->surfaces[aidx->is_right_not_left].r_max[1];
 			y=h-16*6;
 			GUITPrint(ghMemDC, 0, y, 0, "D %gcm, F %gcm, f/%g\t Std.Dev %lfmm", ap, focus, focus/ap, 10*spread), y+=16;
 
 			int txtColor0=GetTextColor(ghMemDC);
-			for(int kp=0;kp<(int)photons->count;++kp)
-			{
-				Photon *ph=(Photon*)array_at(&photons, kp);
-				SetTextColor(ghMemDC, ph->color);
-				GUIPrint(ghMemDC, 0, y, "lambda%d = %gnm", kp+1, ph->lambda), y+=16;
-			}
+			SetTextColor(ghMemDC, lightpaths[0].color);
+			GUIPrint(ghMemDC, 0, y, "lambda1 = %gnm", lightpaths[0].lambda), y+=16;
+			SetTextColor(ghMemDC, lightpaths[1].color);
+			GUIPrint(ghMemDC, 0, y, "lambda2 = %gnm", lightpaths[1].lambda), y+=16;
+			SetTextColor(ghMemDC, lightpaths[2].color);
+			GUIPrint(ghMemDC, 0, y, "lambda3 = %gnm", lightpaths[2].lambda), y+=16;
 			SetTextColor(ghMemDC, txtColor0);
 		}
 	}
@@ -1757,6 +1295,14 @@ void			wnd_resize()
 	for(int k=hist_idx;k<w;++k)
 		history[k]=-1;
 	//memset(history+hist_idx, 0, (w-hist_idx)*sizeof(double));
+}
+void			messagebox(const char *title, const char *format, ...)
+{
+	va_list args;
+	va_start(args, format);
+	vsprintf_s(g_buf, G_BUF_SIZE, format, args);
+	va_end(args);
+	MessageBoxA(ghWnd, g_buf, title, MB_OK);
 }
 long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, long lParam)
 {
@@ -1811,31 +1357,31 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 		{
 			int e=0;
 			double dx=DX/w;
-			OpticElem *oe=(OpticElem*)array_at(&elements, current_elem);
+			GlassElem *ge=elements+current_elem;
 			if(kb['1']||kb[VK_NUMPAD1])//R2a
 			{
-				if(kb[VK_LEFT	]&&oe->active)	oe->surfaces[0].pos-=dx, oe->surfaces[1].pos-=dx, e=1;
-				if(kb[VK_RIGHT	]&&oe->active)	oe->surfaces[0].pos+=dx, oe->surfaces[1].pos+=dx, e=1;
+				if(kb[VK_LEFT	]&&ge->active)	ge->dist-=0.9*dx, e=1;
+				if(kb[VK_RIGHT	]&&ge->active)	ge->dist+=0.9*dx, e=1;
 			}
 			else if(kb['2']||kb[VK_NUMPAD2])//R2b
 			{
-				if(kb[VK_LEFT	]&&oe->active)	change_diopter(&oe->surfaces[0].radius, -0.01*dx), e=1;
-				if(kb[VK_RIGHT	]&&oe->active)	change_diopter(&oe->surfaces[0].radius, 0.01*dx), e=1;
+				if(kb[VK_LEFT	]&&ge->active)	change_diopter(&ge->Rl, -0.01*dx), e=1;
+				if(kb[VK_RIGHT	]&&ge->active)	change_diopter(&ge->Rl, 0.01*dx), e=1;
 			}
 			else if(kb['3']||kb[VK_NUMPAD3])//t2
 			{
-				if(kb[VK_LEFT	]&&oe->active)	oe->surfaces[1].pos-=dx, e=1;
-				if(kb[VK_RIGHT	]&&oe->active)	oe->surfaces[1].pos+=dx, e=1;
+				if(kb[VK_LEFT	]&&ge->active)	ge->th-=1.2*dx, e=1;
+				if(kb[VK_RIGHT	]&&ge->active)	ge->th+=1.2*dx, e=1;
 			}
 			else if(kb['4']||kb[VK_NUMPAD4])//separation
 			{
-				if(kb[VK_LEFT	]&&oe->active)	change_diopter(&oe->surfaces[1].radius, 0.01*dx), e=1;
-				if(kb[VK_RIGHT	]&&oe->active)	change_diopter(&oe->surfaces[1].radius, -0.01*dx), e=1;
+				if(kb[VK_LEFT	]&&ge->active)	change_diopter(&ge->Rr, 0.01*dx), e=1;
+				if(kb[VK_RIGHT	]&&ge->active)	change_diopter(&ge->Rr, -0.01*dx), e=1;
 			}
 			else if(kb['5']||kb[VK_NUMPAD5])//refractive index
 			{
-				if(kb[VK_LEFT	]&&oe->active)	change_n(&oe->n, 0.01*dx), e=1;
-				if(kb[VK_RIGHT	]&&oe->active)	change_n(&oe->n, -0.01*dx), e=1;
+				if(kb[VK_LEFT	]&&ge->active)	change_n(&ge->n, 0.01*dx), e=1;
+				if(kb[VK_RIGHT	]&&ge->active)	change_n(&ge->n, -0.01*dx), e=1;
 			}
 			else if(_2d_drag_graph_not_window)
 			{
@@ -1866,12 +1412,8 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				}
 				else if(kb['A'])
 				{
-					change_aperture(oe->surfaces, 0.1*dx);
-					change_aperture(oe->surfaces+1, 0.1*dx);
-					e=1;
-
-					//if(ap<100)
-					//	ap+=0.1, e=1;
+					if(ap<100)
+						ap+=0.1, e=1;
 				}
 				else if(kb['X'])	DX/=1.05, AR_Y/=1.05;
 				else if(kb['Y'])	AR_Y*=1.05;
@@ -1893,11 +1435,8 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				}
 				else if(kb['A'])
 				{
-					change_aperture(oe->surfaces, -0.1*dx);
-					change_aperture(oe->surfaces+1, -0.1*dx);
-					e=1;
-					//if(ap>0)
-					//	ap-=0.1, e=1;
+					if(ap>0)
+						ap-=0.1, e=1;
 				}
 				else if(kb['X'])	DX*=1.05, AR_Y*=1.05;
 				else if(kb['Y'])	AR_Y/=1.05;
@@ -1905,7 +1444,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				function1();
 			}
 			if(e)
-				simulate();
+				EVAL();
 			InvalidateRect(ghWnd, 0, 0);
 			if(!kp)
 				timer=0, KillTimer(ghWnd, 0);
@@ -1964,7 +1503,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				nrays+=mw_forward-!mw_forward;
 				if(nrays<1)
 					nrays=1;
-				simulate();
+				EVAL();
 			}
 			else if(kb['X'])
 			{
@@ -1999,14 +1538,11 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				SetTimer(ghWnd, 0, 10, 0), timer=1;
 			break;
 		case VK_TAB:
-			current_elem=mod(current_elem+!kb[VK_SHIFT]-kb[VK_SHIFT], (int)elements->count);
+			current_elem=mod(current_elem+!kb[VK_SHIFT]-kb[VK_SHIFT], ecount);
 			break;
 		case VK_SPACE:
-			{
-				OpticElem *oe=(OpticElem*)array_at(&elements, current_elem);
-				oe->active=!oe->active;
-				simulate();
-			}
+			elements[current_elem].active=!elements[current_elem].active;
+			EVAL();
 			break;
 		case VK_F1:
 			messagebox("Controls",
@@ -2043,29 +1579,14 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				"\n"
 				"Built on: %s %s", __DATE__, __TIME__);
 			break;
-		case 'O':
-			if(kb[VK_CONTROL])//open another system
-			{
-				if(open_system())
-				{
-					array_free(&ebackup);
-					ebackup=array_copy(&elements);
-					simulate();
-				}
-				else
-				{
-					array_free(&elements);
-					elements=array_copy(&ebackup);
-				}
-			}
-			else//optimize
+		case 'O'://optimize
 			{
 				static double *grad=0, *velocity=0;
 				int var_idx[]={0, 1, 2, 3};
 				int nvars=SIZEOF(var_idx);
 				if(!grad)
 				{
-					int bytesize=(int)elements->count*nvars*sizeof(double);
+					int bytesize=ecount*nvars*sizeof(double);
 					grad	=(double*)malloc(bytesize);
 					velocity=(double*)malloc(bytesize);
 					memset(velocity, 0, bytesize);
@@ -2081,7 +1602,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 						velocity[k]*=0.5;
 				}
 				update_params(velocity, var_idx, nvars, exclude_first);
-				simulate();
+				EVAL();
 			}
 			break;
 		case 'C':
@@ -2093,85 +1614,57 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			break;
 		case 'P':
 			{
-				OpticElem *oe=(OpticElem*)array_at(&elements, current_elem), *oe2;
 				int e=0;
 				if(kb['2'])
-				{
-					if(oe->surfaces[0].radius)
-						oe->surfaces[0].radius=0;
-					else
-					{
-						oe2=(OpticElem*)array_at(&ebackup, current_elem);
-						oe->surfaces[0].radius=oe2->surfaces[0].radius;
-					}
-					e=1;
-				}
+					e=1, elements[current_elem].Rl=0;
 				if(kb['4'])
-				{
-					if(oe->surfaces[1].radius)
-						oe->surfaces[1].radius=0;
-					else
-					{
-						oe2=(OpticElem*)array_at(&ebackup, current_elem);
-						oe->surfaces[1].radius=oe2->surfaces[1].radius;
-					}
-					e=1;
-				}
+					e=1, elements[current_elem].Rr=0;
 				if(e)
-					simulate();
+					EVAL();
 			}
 			break;
 		case 'T':
-			{
-				Point *p=(Point*)array_at(&ray_spread_mean, photons->count);
-				VX=p->x;
-				VY=p->y;
-			}
+			VX=ray_spread_mean[n_count].x;
+			VY=ray_spread_mean[n_count].y;
 			break;
 		//case 'M':
 		//	twosides=!twosides;
-		//	simulate();
+		//	EVAL();
 		//	break;
-		case 'F'://flip optical element
+		case 'F':
 			{
-				OpticElem *oe=(OpticElem*)array_at(&elements, current_elem);
-				if(oe->active)
+				GlassElem *ge=elements+current_elem;
+				if(ge->active)
 				{
 					double temp;
-
-					temp=oe->surfaces[0].radius;
-					oe->surfaces[0].radius=-oe->surfaces[1].radius;
-					oe->surfaces[1].radius=-temp;
-
-					simulate();
+					temp=ge->Rl, ge->Rl=ge->Rr, ge->Rr=temp;
+					EVAL();
 				}
 			}
 			break;
 		case 'R':
 			{
 				int e=0;
-				OpticElem *oe=(OpticElem*)array_at(&elements, current_elem);
-				OpticElem *oe0=(OpticElem*)array_at(&ebackup, current_elem);
 				if(kb[VK_SHIFT])
 				{
-					memcpy(elements, ebackup, elements->count*sizeof(OpticElem));
-					tan_tilt=0;
-					//ap=ap0;
-					//lambda=lambda0;
 					e=1;
+					tan_tilt=0;
+					ap=ap0;
+					//lambda=lambda0;
+					memcpy(elements, ebackup, ecount*sizeof(GlassElem));
 				}
 				else if(kb['1'])
-					oe->surfaces[0].pos=oe0->surfaces[0].pos, e=1;
+					elements[current_elem].dist=ebackup[current_elem].dist, e=1;
 				else if(kb['2'])
-					oe->surfaces[0].radius=oe0->surfaces[0].radius, e=1;
+					elements[current_elem].Rl=ebackup[current_elem].Rl, e=1;
 				else if(kb['3'])
-					oe->surfaces[1].pos=oe->surfaces[0].pos+(oe0->surfaces[1].pos-oe0->surfaces[0].pos), e=1;
+					elements[current_elem].th=ebackup[current_elem].th, e=1;
 				else if(kb['4'])
-					oe->surfaces[1].radius=oe0->surfaces[1].radius, e=1;
+					elements[current_elem].Rr=ebackup[current_elem].Rr, e=1;
 				else if(kb['5'])
-					oe->n=oe0->n, e=1;
+					elements[current_elem].n=ebackup[current_elem].n, e=1;
 				if(e)
-					simulate();
+					EVAL();
 				else
 				{
 					if(!kb[VK_CONTROL])
@@ -2223,6 +1716,16 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 }
 int __stdcall	WinMain(HINSTANCE hInstance, HINSTANCE hPrev, char *cmdargs, int nCmdShow)
 {
+	shift_lambdas(0);
+	ebackup=(GlassElem*)malloc(ecount*sizeof(GlassElem));
+	memcpy(ebackup, elements, ecount*sizeof(GlassElem));
+	//lambda0=lambda;
+
+	hPen=CreatePen(PS_SOLID, 1, _2dCheckColor);
+	hBrush=CreateSolidBrush(_2dCheckColor);
+	hPenLens=CreatePen(PS_SOLID, 1, 0x00FF00FF);
+	hBrushHollow=(HBRUSH)GetStockObject(NULL_BRUSH);
+
 	WNDCLASSEXA wndClassEx=
 	{
 		sizeof(WNDCLASSEXA), CS_HREDRAW|CS_VREDRAW|CS_DBLCLKS,
@@ -2235,24 +1738,12 @@ int __stdcall	WinMain(HINSTANCE hInstance, HINSTANCE hPrev, char *cmdargs, int n
 
 		0, "New format", 0
 	};
-
-	ghInstance=hInstance;
-	hPen=CreatePen(PS_SOLID, 1, _2dCheckColor);
-	hBrush=CreateSolidBrush(_2dCheckColor);
-	hPenLens=CreatePen(PS_SOLID, 1, 0x00FF00FF);
-	hBrushHollow=(HBRUSH)GetStockObject(NULL_BRUSH);
-
 	RegisterClassExA(&wndClassEx);
-	ghWnd=CreateWindowExA(0, wndClassEx.lpszClassName, "Optics Simulator", WS_CAPTION|WS_SYSMENU|WS_THICKFRAME|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_CLIPCHILDREN, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, 0, 0, hInstance, 0);//20220504
+	ghWnd=CreateWindowExA(0, wndClassEx.lpszClassName, "Lens Designer", WS_CAPTION|WS_SYSMENU|WS_THICKFRAME|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_CLIPCHILDREN, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, 0, 0, hInstance, 0);//20220504
 	
-		if(!open_system())
-			return 1;
 		wnd_resize();
 		function1();
-
-		shift_lambdas(0);
-		ebackup=array_copy(&elements);
-		simulate();
+		EVAL();
 
 	ShowWindow(ghWnd, nCmdShow);
 	
