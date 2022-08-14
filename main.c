@@ -583,7 +583,8 @@ AreaIdx			initial_target={0};
 int				nrays=10,
 				in_path_count=0,
 				out_path_count=0,
-				no_focus=0;
+				no_focus=0,
+				no_system=0;
 double			tan_tilt=0,//rays tilt
 				x_sensor=0,//x-coordinate of best sensor position
 				y_focus=0,
@@ -1936,19 +1937,23 @@ void			simulate()//number of rays must be even, always double-sided
 
 	if(!elements||!elements->count)
 	{
-		LOG_ERROR("Elements array is empty");//optical device unknown
+		no_system=1;
+		//LOG_ERROR("Elements array is empty");//optical device unknown
 		return;
 	}
 	if(!photons||!photons->count)
 	{
-		LOG_ERROR("Photon array is empty");//colors unknown
+		no_system=1;
+		//LOG_ERROR("Photon array is empty");//colors unknown
 		return;
 	}
 	if(!order||!order->count)
 	{
-		LOG_ERROR("Order path array is empty");//device operation unknown
+		no_system=1;
+		//LOG_ERROR("Order path array is empty");//device operation unknown
 		return;
 	}
+	no_system=0;
 	
 	//naive collision detection
 #if 0
@@ -2797,7 +2802,7 @@ void			render()
 				GUITPrint(ghMemDC, 0, y, 0, "%s %c\t%g\t%g\t%g\t%g\t%g  %s%s", current_elem==ke?"->":" ", oe->active?'V':'X', oe->surfaces[0].pos, oe->surfaces[0].radius, th, -oe->surfaces[1].radius, oe->n, (char*)oe->name->data, current_elem==ke?"\t<-":""), y+=16;
 			}
 			y+=16;
-			GUITPrint(ghMemDC, 0, y, 0, "\tSensor: %d/%d rays  Std.Dev %lfmm%s", out_path_count, in_path_count, r_blur, no_focus?"\tNO FOCUS":""), y+=32;
+			GUITPrint(ghMemDC, 0, y, 0, "\tSensor: %d/%d rays  Std.Dev %lfmm%s", out_path_count, in_path_count, 10*r_blur, no_system?"\t\tNO SYSTEM":(no_focus?"\t\tNO FOCUS":"")), y+=32;
 #if 0
 			Point *point=(Point*)array_at(&ray_spread_mean, (int)photons->count);
 			if(point)
@@ -3342,7 +3347,7 @@ int __stdcall	WinMain(HINSTANCE hInstance, HINSTANCE hPrev, char *cmdargs, int n
 		wnd_resize();
 		function1();
 
-		shift_lambdas(0);
+		//shift_lambdas(0);
 		ebackup=array_copy(&elements);
 		simulate();
 
