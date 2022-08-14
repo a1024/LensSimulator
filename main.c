@@ -461,14 +461,14 @@ typedef struct SurfaceRangeStruct
 	double r_max;
 	int type;
 } SurfaceRange;
-#endif
-
 typedef enum OpticElemStateEnum//deprecated
 {
 	STATE_NONE,
 	STATE_MIRROR,
 	STATE_ACTIVE,
 } OpticElemState;
+#endif
+
 typedef enum SurfaceTypeEnum
 {
 	SURF_UNINITIALIZED,
@@ -503,7 +503,7 @@ typedef struct SurfaceStruct
 } Surface;
 typedef struct OpticElemStruct
 {
-	OpticElemState active;
+	int active;
 	ArrayHandle name;	//string
 	double n;			//refractive index
 	Surface surfaces[2];//{left, right}		right radius is negated when parsing input
@@ -1508,6 +1508,12 @@ int				open_system(const char *filename)
 					success=0;
 					goto finish;
 				}
+				if(text->data[idx]==';')
+				{
+					initial_target.is_outer_not_inner=0;
+					++idx;
+					break;
+				}
 				EXPECT('.')
 				if(skip_ws(text, &idx, &lineno, &linestart))
 				{
@@ -1650,15 +1656,15 @@ void	normalize(double dx, double dy, Point *ret)
 	ret->x=dx*invhyp;
 	ret->y=dy*invhyp;
 }
-int		intersect_line_circle(double x1, double y1, double x2, double y2, double cx, double R, Point *ret_points)//https://mathworld.wolfram.com/Circle-LineIntersection.html
+int		intersect_line_circle(double x1, double y1, double x2, double y2, double cx, double radius, Point *ret_points)//https://mathworld.wolfram.com/Circle-LineIntersection.html
 {
 	double dx=x2-x1, dy=y2-y1, dr=sqrt(dx*dx+dy*dy);
 	if(dr)
 	{
-		x1-=cx, x2-=cx;
+		x1-=cx, x2-=cx; //y1-=cy, y2-=cy;//cy==0
 		double D=x1*y2-x2*y1;
 		double dr2=dr*dr;
-		double disc=R*R*dr2-D*D;
+		double disc=radius*radius*dr2-D*D;
 		if(disc>=0)
 		{
 			disc=sqrt(disc), dr2=1/dr2;
@@ -1679,7 +1685,7 @@ int		intersect_ray_surface(double x1, double y1, double x2, double y2, double ap
 	int hit;
 	Point sol[2];
 
-	if(R!=R||!R||fabs(R)==_HUGE)//plane at x
+	if(R!=R||!R||fabs(R)==_HUGE)//vertical plane at x
 	{
 		if(x1==x2)
 			return 0;
@@ -1705,29 +1711,61 @@ int		intersect_ray_surface(double x1, double y1, double x2, double y2, double ap
 	}
 	return hit;
 }
+int		collinear(Point const *a, Point const *b, Point const *c)
+{
+	double dx=b->x-a->x, dy=b->y-a->y;
+	double disc=dx*dx+dy*dy;
+	if(!disc)
+		return 1;
+	double dist=(dx*(a->y-c->y)-dy*(a->x-c->x))/sqrt(disc);
+	return abs(dist)<1e-5;
+}
 
-int		refract(double n_before, double n_after, double sin_in, double *cos_em, double *sin_em)
+int		calc_interaction(SurfaceType type, int active, double n_before, double n_after, double cos_in, double sin_in, double *cos_em, double *sin_em)
 {
-	double temp=n_before*sin_in;
-	int reflection=temp>n_after;
-	if(reflection)//total internal reflection
+	switch(type)
 	{
+	case SURF_HOLE://extend
+		*cos_em=cos_in;
 		*sin_em=sin_in;
-		*cos_em=-sqrt(1-*sin_em**sin_em);
+		return 1;
+	case SURF_TRANSP:
+		if(active)//refract
+		{
+			double temp=n_before*sin_in;
+			if(temp>n_after)//total internal reflection
+			{
+				*sin_em=sin_in;
+				*cos_em=-cos_in;
+				//*cos_em=-sqrt(1-*sin_em**sin_em);
+			}
+			else
+			{
+				*sin_em=temp/n_after;
+				*cos_em=cos_in;
+				//*cos_em=sqrt(1-*sin_em**sin_em);
+			}
+		}
+		else
+		{
+			*cos_em=cos_in;
+			*sin_em=sin_in;
+			return 1;
+		}
+		break;
+	case SURF_MIRROR://reflect
+		*cos_em=-cos_in;
+		*sin_em=sin_in;
+		break;
+	default://unreachable
+		LOG_ERROR("Invalid surface type %d", type);
+		*cos_em=cos_in;
+		*sin_em=sin_in;
+		break;
 	}
-	else
-	{
-		*sin_em=temp/n_after;
-		*cos_em=sqrt(1-*sin_em**sin_em);
-	}
-	return reflection;
+	return 0;
 }
-void	reflect(double cos_in, double sin_in, double *cos_em, double *sin_em)
-{
-	*cos_em=-cos_in;
-	*sin_em=sin_in;
-}
-int		hit_ray_surface(double x1, double y1, double x2, double y2, double ap_min, double ap_max, double nL, double nR, double x, double R, SurfaceType type, int active, Point *ret_line)//(x1, y1) is in present
+int		hit_ray_surface(double x1, double y1, double x2, double y2, double ap_min, double ap_max, double n_before, double n_after, double x, double R, SurfaceType type, int active, Point *ret_line)//(x1, y1) is in present
 {
 	int hit;
 	Point p[2];
@@ -1740,62 +1778,26 @@ int		hit_ray_surface(double x1, double y1, double x2, double y2, double ap_min, 
 	if(!R||fabs(R)==_HUGE)//plane at x
 	{
 		normalize(x2-x1, y2-y1, p);
+		cos_in=p->x;
 		sin_in=p->y;
-		switch(type)
-		{
-		case SURF_HOLE:
-			cos_em=p->x;
-			sin_em=p->y;
-			break;
-		case SURF_TRANSP:
-			if(active)
-				refract(nL, nR, sin_in, &cos_em, &sin_em);
-			else
-			{
-				cos_em=p->x;
-				sin_em=sin_in;
-			}
-			break;
-		case SURF_MIRROR:
-			reflect(p->x, p->y, &cos_em, &sin_em);
-			break;
-		}
+		hit+=calc_interaction(type, active, n_before, n_after, cos_in, sin_in, &cos_em, &sin_em);
 		ret_line[1].x=ret_line[0].x+cos_em;
 		ret_line[1].y=ret_line[0].y+sin_em;
 	}
 	else//+/- spherical at x
 	{
-		double xcenter=x+R;
+		double xcenter=x+R;//left surface convention
 
 		//int inc_dir=sgn_star(x2-x1);
 		normalize(x2-x1, y2-y1, p);//p[0] is the incidence unit vector
-		normalize(sgn_star(R)*(xcenter-ret_line[0].x), -sgn_star(R)*ret_line[0].y, p+1);//p[1] is the surface normal unit vector
+		normalize(sgn_star(R)*(xcenter-ret_line[0].x), -sgn_star(R)*ret_line[0].y, p+1);//p[1] is the surface normal unit vector = normalize(sgn(radius)*(center-hit))
 		cos_in=p[0].x*p[1].x+p[0].y*p[1].y;//cosine of angle between two unit vectors is the dot product
 		sin_in=p[0].y*p[1].x-p[0].x*p[1].y;//sine of angle between two unit vectors is the cross product
-		switch(type)
-		{
-		case SURF_HOLE:
-			cos_em=cos_in;
-			sin_em=sin_in;
-			break;
-		case SURF_TRANSP:
-			if(active)
-				refract(nL, nR, sin_in, &cos_em, &sin_em);
-			else
-			{
-				cos_em=cos_in;
-				sin_em=sin_in;
-			}
-			break;
-		case SURF_MIRROR:
-			reflect(cos_in, sin_in, &cos_em, &sin_em);
-			break;
-		}
-		//hit+=refract(nL, nR, sin_in, &cos_em, &sin_em);
+		hit+=calc_interaction(type, active, n_before, n_after, cos_in, sin_in, &cos_em, &sin_em);
 		double
-			c2=cos_em*p[1].x-sin_em*p[1].y,
-			s2=sin_em*p[1].x+cos_em*p[1].y;
-		//if(hit!=2&&inc_dir!=sgn_star(c2))
+			c2=cos_em*p[1].x-sin_em*p[1].y,//cos(em+n)=cos(em)*cos(n)-sin(em)*sin(n)
+			s2=sin_em*p[1].x+cos_em*p[1].y;//sin(em+n)=sin(em)*cos(n)+cos(em)*sin(n)
+		//if(hit!=2&&inc_dir!=sgn_star(c2))//what is this?
 		//	c2=-c2, s2=-s2;
 		ret_line[1].x=ret_line[0].x+c2;
 		ret_line[1].y=ret_line[0].y+s2;
@@ -1923,8 +1925,6 @@ void			get_params(OpticElem const *e1, AreaIdx *aidx, double lambda, double *ap_
 }
 void			simulate()//number of rays must be even, always double-sided
 {
-	ArrayHandle emerged;
-
 	if(!elements||!elements->count)
 	{
 		LOG_ERROR("Elements array is empty");//optical device unknown
@@ -2010,7 +2010,6 @@ void			simulate()//number of rays must be even, always double-sided
 
 	//initialize incident rays
 	AreaIdx *aidx=(AreaIdx*)array_at(&order, 0);
-	//double r_sign=aidx->is_right_not_left?-1:1;
 	e1=(OpticElem*)array_at(&elements, aidx->e_idx);
 	surface=e1->surfaces+aidx->is_right_not_left;
 	for(int kp=0;kp<(int)photons->count;++kp)
@@ -2027,43 +2026,64 @@ void			simulate()//number of rays must be even, always double-sided
 			points->y=ymin+(kp2>>1)*(ymax-ymin)/(ph->paths->count>>1)+0.5;
 			if(kp2&1)//rays are in pairs mirrored by ground line
 				points->y=-points->y;
-			intersect_ray_surface(xstart, points->y, xstart+xlength, points->y, ymin, ymax, surface->pos, surface->radius, points+1);//must hit
+			path->emerged=intersect_ray_surface(xstart, points->y, xstart+xlength, points->y, ymin, ymax, surface->pos, surface->radius, points+1);//must hit
+			points[0].y-=tan_tilt*(points[1].x-points[0].x);
 		}
 	}
-
-	//initialize emerged array to ones
-	ARRAY_ALLOC(char, emerged, 0, nrays*photons->count, 0, 0);
-	memset(emerged->data, 1, emerged->count);
 
 
 	//main simulation loop
 	for(int ko=0;ko<(int)order->count;++ko)//for each areidx in list order
 	{
 		aidx=(AreaIdx*)array_at(&order, ko);
-		e1=(OpticElem*)array_at(&elements, aidx->e_idx);//fetch element
+		//if(aidx->e_idx==1&&aidx->is_right_not_left==0&&aidx->is_outer_not_inner==0)
+		//	aidx=aidx;
+		e1=(OpticElem*)array_at(&elements, aidx->e_idx);//fetch next element
 		for(int kp=0;kp<(int)photons->count;++kp)
 		{
 			Photon *ph=(Photon*)array_at(&photons, kp);
 			for(int kp2=0;kp2<(int)ph->paths->count;++kp2)//for each ray
 			{
 				Path *path=(Path*)array_at(&ph->paths, kp2);
-				char *flag=(char*)array_at(&emerged, nrays*kp+kp2);
-				if(!*flag)
+				if(!path->emerged)
 					continue;
-				Point *line=(Point*)array_at(&path->points, path->points->count-2);
-				Point l2[2];
+				Point *in_ray=(Point*)array_at(&path->points, path->points->count-2);
+				Point em_ray[2];
 				double ap_min, ap_max, nL, nR, pos, radius;
 				SurfaceType type;
 				get_params(e1, aidx, ph->lambda, &ap_min, &ap_max, &nL, &nR, &pos, &radius, &type);
-				//intersect_ray_surface(line[0].x, line[0].y, line[1].x, line[1].y
-				int hit=hit_ray_surface(line[0].x, line[0].y, line[1].x, line[1].y, ap_min, ap_max, nL, nR, pos, radius, type, e1->active, l2);
+				int hit=hit_ray_surface(in_ray[0].x, in_ray[0].y, in_ray[1].x, in_ray[1].y, ap_min, ap_max, nL, nR, pos, radius, type, e1->active, em_ray);
+				if(hit==2)//extend same ray later
+					continue;
 				if(hit)
-					ARRAY_APPEND(path->points, l2, 2, 1, 0);
+				{
+					//if(!collinear(in_ray, in_ray+1, em_ray))//em_ray[0] must be collinear with in_ray
+					//	LOG_ERROR("Ray extension not collinear");
+					in_ray[1]=em_ray[0];
+					ARRAY_APPEND(path->points, em_ray+1, 1, 1, 0);
+				}
 				else
-					*flag=0;
+					path->emerged=0;
 			}
 		}
 	}
+
+	//extend emerging rays
+#if 1
+	for(int kp=0;kp<(int)photons->count;++kp)
+	{
+		Photon *ph=(Photon*)array_at(&photons, kp);
+		for(int kp2=0;kp2<(int)ph->paths->count;++kp2)//for each ray
+		{
+			Path *path=(Path*)array_at(&ph->paths, kp2);
+			if(!path->emerged)
+				continue;
+			Point *line=(Point*)array_at(&path->points, path->points->count-2);
+			line[1].x=line[0].x+100*(line[1].x-line[0].x);
+			line[1].y=line[0].y+100*(line[1].y-line[0].y);
+		}
+	}
+#endif
 }
 #if 0
 double			eval(GlassElem *elements, int ge_count, int nrays, int n_count, double aperture, double xend, double tan_tilt)
@@ -2465,10 +2485,19 @@ double			draw_arc(double x, double R, double ap_min, double ap_max, ScaleConvert
 }
 void			draw_curve(Point *points, int npoints, ScaleConverter *scale)
 {
-	for(int k=0;k<npoints-1;++k)
+	int x1=0, y1=0, x2, y2;
+	for(int k=0;k<npoints;++k)
 	{
-		MoveToEx(ghMemDC, real2screenX(points[k].x, scale), real2screenY(points[k].y, scale), 0);
-		LineTo(ghMemDC, real2screenX(points[k+1].x, scale), real2screenY(points[k+1].y, scale));
+		x2=real2screenX(points[k].x, scale);
+		y2=real2screenY(points[k].y, scale);
+		if(k)
+		{
+			MoveToEx(ghMemDC, x1, y1, 0);
+			LineTo(ghMemDC, x2, y2);
+		}
+		Ellipse(ghMemDC, x2-10, y2-10, x2+10, y2+10);//
+		x1=x2;
+		y1=y2;
 	}
 }
 void			render()
@@ -2767,8 +2796,9 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			}
 			else if(kb['2']||kb[VK_NUMPAD2])//left radius
 			{
-				if(kb[VK_LEFT	]&&oe->active)	change_diopter(&oe->surfaces[0].radius, -0.01*dx), e=1;
-				if(kb[VK_RIGHT	]&&oe->active)	change_diopter(&oe->surfaces[0].radius, 0.01*dx), e=1;
+				int allow_mod=oe->active||oe->surfaces[0].type[0]==SURF_MIRROR||oe->surfaces[0].type[1]==SURF_MIRROR;
+				if(allow_mod&&kb[VK_LEFT	])	change_diopter(&oe->surfaces[0].radius, -0.01*dx), e=1;//can be modified when inactive because of mirrors
+				if(allow_mod&&kb[VK_RIGHT	])	change_diopter(&oe->surfaces[0].radius, 0.01*dx), e=1;
 			}
 			else if(kb['3']||kb[VK_NUMPAD3])//thickness
 			{
@@ -2777,8 +2807,9 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			}
 			else if(kb['4']||kb[VK_NUMPAD4])//right radius: note: right radius is flipped
 			{
-				if(kb[VK_LEFT	]&&oe->active)	change_diopter(&oe->surfaces[1].radius, -0.01*dx), e=1;
-				if(kb[VK_RIGHT	]&&oe->active)	change_diopter(&oe->surfaces[1].radius, 0.01*dx), e=1;
+				int allow_mod=oe->active||oe->surfaces[1].type[0]==SURF_MIRROR||oe->surfaces[1].type[1]==SURF_MIRROR;
+				if(allow_mod&&kb[VK_LEFT	])	change_diopter(&oe->surfaces[1].radius, -0.01*dx), e=1;//can be modified when inactive because of mirrors
+				if(allow_mod&&kb[VK_RIGHT	])	change_diopter(&oe->surfaces[1].radius, 0.01*dx), e=1;
 			}
 			else if(kb['5']||kb[VK_NUMPAD5])//refractive index
 			{
