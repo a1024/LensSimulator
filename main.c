@@ -21,6 +21,9 @@
 #include<math.h>
 #include<Windows.h>
 #include<sys/stat.h>
+#include<io.h>
+#include<stdio.h>
+#include<fcntl.h>
 
 #define			SIZEOF(ST_ARR)	(sizeof(ST_ARR)/sizeof(*(ST_ARR)))
 #define			G_BUF_SIZE	2048
@@ -76,6 +79,63 @@ void			messagebox(const char *title, const char *format, ...)
 	va_end(args);
 	MessageBoxA(ghWnd, g_buf, title, MB_OK);
 }
+int				consoleactive=0;
+void			console_start()//https://stackoverflow.com/questions/191842/how-do-i-get-console-output-in-c-with-a-windows-program
+{
+	if(!consoleactive)
+	{
+		consoleactive=1;
+		int hConHandle;
+		long lStdHandle;
+		CONSOLE_SCREEN_BUFFER_INFO coninfo;
+		FILE *fp;
+
+		// allocate a console for this app
+		AllocConsole();
+
+		// set the screen buffer to be big enough to let us scroll text
+		GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &coninfo);
+		coninfo.dwSize.Y=1000;
+		SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), coninfo.dwSize);
+
+		// redirect unbuffered STDOUT to the console
+		lStdHandle=(long)GetStdHandle(STD_OUTPUT_HANDLE);
+		hConHandle=_open_osfhandle(lStdHandle, _O_TEXT);
+		fp=_fdopen(hConHandle, "w");
+		*stdout=*fp;
+		setvbuf(stdout, 0, _IONBF, 0);
+
+		// redirect unbuffered STDIN to the console
+		lStdHandle=(long)GetStdHandle(STD_INPUT_HANDLE);
+		hConHandle=_open_osfhandle(lStdHandle, _O_TEXT);
+		fp=_fdopen(hConHandle, "r");
+		*stdin=*fp;
+		setvbuf(stdin, 0, _IONBF, 0);
+
+		// redirect unbuffered STDERR to the console
+		lStdHandle=(long)GetStdHandle(STD_ERROR_HANDLE);
+		hConHandle=_open_osfhandle(lStdHandle, _O_TEXT);
+		fp=_fdopen(hConHandle, "w");
+		*stderr=*fp;
+		setvbuf(stderr, 0, _IONBF, 0);
+
+#ifdef __cplusplus
+		// make cout, wcout, cin, wcin, wcerr, cerr, wclog and clog
+		// point to console as well
+		std::ios::sync_with_stdio();
+#endif
+
+		printf("\n\tWARNNG: CLOSING THIS WINDOW WILL CLOSE THE PROGRAM\n\n");
+	}
+}
+void			console_end()
+{
+	if(consoleactive)
+	{
+		FreeConsole();
+		consoleactive=0;
+	}
+}
 
 int				mod(int x, int n)
 {
@@ -103,6 +163,13 @@ void			memfill(void *dst, const void *src, size_t dstbytes, size_t srcbytes)
 	if(copied<dstbytes)
 		memcpy(d+copied, d, dstbytes-copied);
 }
+void 			memswap(void *p1, void *p2, size_t size, void *temp)
+{
+	memcpy(temp, p1, size);
+	memcpy(p1, p2, size);
+	memcpy(p2, temp, size);
+}
+void			negate(double *x){*x=-*x;}
 
 char			error_msg[G_BUF_SIZE]={0};
 int				runtime_error(const char *file, int line, const char *format, ...)
@@ -2844,6 +2911,44 @@ void			wnd_resize()
 		history[k]=-1;
 	//memset(history+hist_idx, 0, (w-hist_idx)*sizeof(double));
 }
+void			set_attribute(int attrNo)
+{
+	OpticElem *oe=(OpticElem*)array_at(&elements, current_elem);
+	console_start();
+	const char *a=0;
+	switch(attrNo)
+	{
+	case 1:a="position";break;
+	case 2:a="left radius";break;
+	case 3:a="thickness";break;
+	case 4:a="right radius";break;
+	case 5:a="refractive index (n)";break;
+	default:a="UNRECOGNIZED ATTRIBUTE";break;
+	}
+	printf("Set %s %s: ", (char*)oe->name->data, a);
+	double val=0;
+	scanf_s("%lf", &val);
+	switch(attrNo)
+	{
+	case 1://set position
+		oe->surfaces[1].pos=val+oe->surfaces[1].pos-oe->surfaces[0].pos;
+		oe->surfaces[0].pos=val;
+		break;
+	case 2://set left radius
+		oe->surfaces[0].radius=val;
+		break;
+	case 3://set thickness
+		oe->surfaces[1].pos=oe->surfaces[0].pos+val;
+		break;
+	case 4://set right radius
+		oe->surfaces[1].radius=-val;
+		break;
+	case 5:
+		oe->n=val;
+		break;
+	}
+	simulate();
+}
 long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, long lParam)
 {
 	switch(message)
@@ -2860,6 +2965,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			hBitmap=(HBITMAP)SelectObject(ghMemDC, CreateDIBSection(0, &bmpInfo, DIB_RGB_COLORS, (void**)&rgb, 0, 0));
 			SetBkMode(ghMemDC, TRANSPARENT);
 			InvalidateRect(ghWnd, 0, 0);
+			function1();
 		}
 		break;
 	case WM_ACTIVATE:
@@ -3120,6 +3226,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				"Speed of change depends on zoom level\n"
 				"\n"
 				"Shift R: Reset all glass elements\n"
+				"1/2/3/4/5 S: Set value of corresponding property\n"
 				"1/2/3/4/5 R: Reset corresponding property of current glass element\n"
 				"Alt R: Reset ray tilt\n"
 				"\n"
@@ -3176,6 +3283,18 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				simulate();
 			}
 			break;
+		case 'S':
+			if(kb['1'])
+				set_attribute(1);
+			else if(kb['2'])
+				set_attribute(2);
+			else if(kb['3'])
+				set_attribute(3);
+			else if(kb['4'])
+				set_attribute(4);
+			else if(kb['5'])
+				set_attribute(5);
+			break;
 		case 'C':
 			clearScreen=!clearScreen;
 			break;
@@ -3226,9 +3345,13 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				OpticElem *oe=(OpticElem*)array_at(&elements, current_elem);
 				if(oe->active)
 				{
-					double temp;
+					//Surface temp;//BREAKS PATH
+					//memswap(oe->surfaces, oe->surfaces+1, sizeof(Surface), &temp);
+					//memswap(&oe->surfaces[0].pos, &oe->surfaces[1].pos, sizeof(double), &temp);
+					//negate(&oe->surfaces[0].radius);
+					//negate(&oe->surfaces[1].radius);
 
-					temp=oe->surfaces[0].radius;
+					double temp=oe->surfaces[0].radius;
 					oe->surfaces[0].radius=-oe->surfaces[1].radius;
 					oe->surfaces[1].radius=-temp;
 
