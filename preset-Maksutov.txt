@@ -1,0 +1,43 @@
+/*
+2022-08-08Mo
+KEYWORDS
+elem <name>:	glass element declaration
+inactive:	makes element initially inactive
+ap:		aperture (diameter) (optional)
+n:		refractive index
+pos:		x-distance from origin
+th:		thickness
+left, right:	surface specifications
+mirror/transp/hole: surface type (transp is default)
+
+light:	wavelength list in nanometers (nm)
+
+rays:	specify the incident ray count
+	and initial target area (not necessarily the first boundary)
+
+path:	describe the correct light path through the optical device
+
+UNITS
+dimensions:	mm, cm (default), m, inch, ft
+wavelength:	A (Angestrom), nm (default)
+*/
+
+//maksutov-cassegrain telescope
+elem	corrector, n=1.512, ap=12cm, pos=10cm, th=1cm;
+	left	=-15cm;
+	right	=16cm: mirror, 2cm, transp;
+
+elem	primary, n=1.512, ap=12.5cm, pos=corrector+22cm, th=2cm;
+	left	=-55cm: transp, 2cm, mirror;
+	right	=plane;
+
+light:	470nm, 550nm, 640nm;	//blue, green, red
+rays:	10, corrector.right.outer;
+
+path:
+	corrector.left,
+	corrector.right.outer,
+	primary.left.outer,
+	corrector.right.inner,
+	primary.left.inner,
+	primary.right;
