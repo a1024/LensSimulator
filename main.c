@@ -1290,10 +1290,10 @@ int				parse_elem(const char *filename, ArrayHandle text, int *idx, int *lineno,
 		e1->surfaces[0].r_max[1]=ap;
 		e1->surfaces[1].r_max[1]=ap;
 	}
-	//if(!e1->surfaces[0].r_max[0])//if inner radius is zero, then set it as outer radius
-	//	e1->surfaces[0].r_max[0]=e1->surfaces[0].r_max[1];
-	//if(!e1->surfaces[1].r_max[0])
-	//	e1->surfaces[1].r_max[0]=e1->surfaces[1].r_max[1];
+	if(!e1->surfaces[0].r_max[0])//if inner radius is zero, then set it as outer radius
+		e1->surfaces[0].r_max[0]=e1->surfaces[0].r_max[1];
+	if(!e1->surfaces[1].r_max[0])
+		e1->surfaces[1].r_max[0]=e1->surfaces[1].r_max[1];
 	for(int k=0;k<2;++k)//set transparent by default
 	{
 		for(int k2=0;k2<2;++k2)
@@ -1610,7 +1610,7 @@ int				open_system(const char *filename)
 					{
 						int end=text->data[idx]==';';
 						++idx;//skip comma
-						aidx->is_outer_not_inner=1;
+						aidx->is_outer_not_inner=0;//default is inner area
 						if(end)
 							break;
 						continue;
@@ -2045,10 +2045,8 @@ void			simulate()//number of rays must be even, always double-sided
 	for(int ko=0;ko<(int)order->count;++ko)//for each areidx in list order
 	{
 		aidx=(AreaIdx*)array_at(&order, ko);
-
-		if(aidx->e_idx==1&&aidx->is_right_not_left==1)//
-			aidx=aidx;
-
+		//if(aidx->e_idx==1&&aidx->is_right_not_left==1)//
+		//	aidx=aidx;
 		e1=(OpticElem*)array_at(&elements, aidx->e_idx);//fetch next element
 		for(int kp=0;kp<(int)photons->count;++kp)
 		{
