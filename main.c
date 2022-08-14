@@ -1627,7 +1627,10 @@ int				open_system(const char *filename)
 						goto finish;
 					}
 					if(text->data[idx]==';')
+					{
+						++idx;//skip semicolon
 						break;
+					}
 					EXPECT(',')
 				}
 			}
@@ -1680,6 +1683,7 @@ int		intersect_ray_surface(double x1, double y1, double x2, double y2, double ap
 	{
 		if(x1==x2)
 			return 0;
+		hit=1;
 		ret_point->x=x;
 		ret_point->y=y1+(y2-y1)/(x2-x1)*(x-x1);
 	}
@@ -1718,11 +1722,16 @@ int		refract(double n_before, double n_after, double sin_in, double *cos_em, dou
 	}
 	return reflection;
 }
-int		refract_ray_surface(double x1, double y1, double x2, double y2, double ap_min, double ap_max, double nL, double nR, double x, double R, Point *ret_line)//(x1, y1) is in present
+void	reflect(double cos_in, double sin_in, double *cos_em, double *sin_em)
+{
+	*cos_em=-cos_in;
+	*sin_em=sin_in;
+}
+int		hit_ray_surface(double x1, double y1, double x2, double y2, double ap_min, double ap_max, double nL, double nR, double x, double R, SurfaceType type, int active, Point *ret_line)//(x1, y1) is in present
 {
 	int hit;
 	Point p[2];
-	double sin_in, sin_em, cos_em;
+	double sin_in, cos_in, sin_em, cos_em;
 
 	hit=intersect_ray_surface(x1, y1, x2, y2, ap_min, ap_max, x, R, ret_line);
 	if(!hit)
@@ -1732,7 +1741,25 @@ int		refract_ray_surface(double x1, double y1, double x2, double y2, double ap_m
 	{
 		normalize(x2-x1, y2-y1, p);
 		sin_in=p->y;
-		hit+=refract(nL, nR, sin_in, &cos_em, &sin_em);
+		switch(type)
+		{
+		case SURF_HOLE:
+			cos_em=p->x;
+			sin_em=p->y;
+			break;
+		case SURF_TRANSP:
+			if(active)
+				refract(nL, nR, sin_in, &cos_em, &sin_em);
+			else
+			{
+				cos_em=p->x;
+				sin_em=sin_in;
+			}
+			break;
+		case SURF_MIRROR:
+			reflect(p->x, p->y, &cos_em, &sin_em);
+			break;
+		}
 		ret_line[1].x=ret_line[0].x+cos_em;
 		ret_line[1].y=ret_line[0].y+sin_em;
 	}
@@ -1740,16 +1767,36 @@ int		refract_ray_surface(double x1, double y1, double x2, double y2, double ap_m
 	{
 		double xcenter=x+R;
 
-		int inc_dir=sgn_star(x2-x1);
-		normalize(x2-x1, y2-y1, p);
-		normalize(sgn_star(R)*(xcenter-ret_line[0].x), -sgn_star(R)*ret_line[0].y, p+1);
-		sin_in=p[0].y*p[1].x-p[0].x*p[1].y;
-		hit+=refract(nL, nR, sin_in, &cos_em, &sin_em);
+		//int inc_dir=sgn_star(x2-x1);
+		normalize(x2-x1, y2-y1, p);//p[0] is the incidence unit vector
+		normalize(sgn_star(R)*(xcenter-ret_line[0].x), -sgn_star(R)*ret_line[0].y, p+1);//p[1] is the surface normal unit vector
+		cos_in=p[0].x*p[1].x+p[0].y*p[1].y;//cosine of angle between two unit vectors is the dot product
+		sin_in=p[0].y*p[1].x-p[0].x*p[1].y;//sine of angle between two unit vectors is the cross product
+		switch(type)
+		{
+		case SURF_HOLE:
+			cos_em=cos_in;
+			sin_em=sin_in;
+			break;
+		case SURF_TRANSP:
+			if(active)
+				refract(nL, nR, sin_in, &cos_em, &sin_em);
+			else
+			{
+				cos_em=cos_in;
+				sin_em=sin_in;
+			}
+			break;
+		case SURF_MIRROR:
+			reflect(cos_in, sin_in, &cos_em, &sin_em);
+			break;
+		}
+		//hit+=refract(nL, nR, sin_in, &cos_em, &sin_em);
 		double
 			c2=cos_em*p[1].x-sin_em*p[1].y,
 			s2=sin_em*p[1].x+cos_em*p[1].y;
-		if(hit!=2&&inc_dir!=sgn_star(c2))
-			c2=-c2, s2=-s2;
+		//if(hit!=2&&inc_dir!=sgn_star(c2))
+		//	c2=-c2, s2=-s2;
 		ret_line[1].x=ret_line[0].x+c2;
 		ret_line[1].y=ret_line[0].y+s2;
 	}
@@ -1858,8 +1905,26 @@ int				ecount=SIZEOF(elements), current_elem=0;
 #endif
 
 
+void			get_params(OpticElem const *e1, AreaIdx *aidx, double lambda, double *ap_min, double *ap_max, double *nL, double *nR, double *pos, double *radius, SurfaceType *type)
+{
+	Surface const *surface=e1->surfaces+aidx->is_right_not_left;
+	//if(ap_min)
+		*ap_min=aidx->is_outer_not_inner?surface->r_max[0]:0;
+	//if(ap_max)
+		*ap_max=surface->r_max[aidx->is_outer_not_inner];
+	double n=lambda2n(e1->n, lambda);
+	if(aidx->is_right_not_left)
+		*nL=n, *nR=1;
+	else
+		*nL=1, *nR=n;
+	*pos=surface->pos;
+	*radius=surface->radius;
+	*type=surface->type[aidx->is_outer_not_inner];
+}
 void			simulate()//number of rays must be even, always double-sided
 {
+	ArrayHandle emerged;
+
 	if(!elements||!elements->count)
 	{
 		LOG_ERROR("Elements array is empty");//optical device unknown
@@ -1966,6 +2031,11 @@ void			simulate()//number of rays must be even, always double-sided
 		}
 	}
 
+	//initialize emerged array to ones
+	ARRAY_ALLOC(char, emerged, 0, nrays*photons->count, 0, 0);
+	memset(emerged->data, 1, emerged->count);
+
+
 	//main simulation loop
 	for(int ko=0;ko<(int)order->count;++ko)//for each areidx in list order
 	{
@@ -1977,13 +2047,20 @@ void			simulate()//number of rays must be even, always double-sided
 			for(int kp2=0;kp2<(int)ph->paths->count;++kp2)//for each ray
 			{
 				Path *path=(Path*)array_at(&ph->paths, kp2);
-				//for(int ke=0;ke<(int)elements->count;++ke)//for each boundary
-				//{
-				//	OpticElem *elem=(OpticElem*)array_at(&elements, ke);
-				//	if(elem->active)
-				//	{
-				//	}
-				//}
+				char *flag=(char*)array_at(&emerged, nrays*kp+kp2);
+				if(!*flag)
+					continue;
+				Point *line=(Point*)array_at(&path->points, path->points->count-2);
+				Point l2[2];
+				double ap_min, ap_max, nL, nR, pos, radius;
+				SurfaceType type;
+				get_params(e1, aidx, ph->lambda, &ap_min, &ap_max, &nL, &nR, &pos, &radius, &type);
+				//intersect_ray_surface(line[0].x, line[0].y, line[1].x, line[1].y
+				int hit=hit_ray_surface(line[0].x, line[0].y, line[1].x, line[1].y, ap_min, ap_max, nL, nR, pos, radius, type, e1->active, l2);
+				if(hit)
+					ARRAY_APPEND(path->points, l2, 2, 1, 0);
+				else
+					*flag=0;
 			}
 		}
 	}
@@ -2683,25 +2760,25 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			int e=0;
 			double dx=DX/w;
 			OpticElem *oe=(OpticElem*)array_at(&elements, current_elem);
-			if(kb['1']||kb[VK_NUMPAD1])//R2a
+			if(kb['1']||kb[VK_NUMPAD1])//position
 			{
 				if(kb[VK_LEFT	]&&oe->active)	oe->surfaces[0].pos-=dx, oe->surfaces[1].pos-=dx, e=1;
 				if(kb[VK_RIGHT	]&&oe->active)	oe->surfaces[0].pos+=dx, oe->surfaces[1].pos+=dx, e=1;
 			}
-			else if(kb['2']||kb[VK_NUMPAD2])//R2b
+			else if(kb['2']||kb[VK_NUMPAD2])//left radius
 			{
 				if(kb[VK_LEFT	]&&oe->active)	change_diopter(&oe->surfaces[0].radius, -0.01*dx), e=1;
 				if(kb[VK_RIGHT	]&&oe->active)	change_diopter(&oe->surfaces[0].radius, 0.01*dx), e=1;
 			}
-			else if(kb['3']||kb[VK_NUMPAD3])//t2
+			else if(kb['3']||kb[VK_NUMPAD3])//thickness
 			{
 				if(kb[VK_LEFT	]&&oe->active)	oe->surfaces[1].pos-=dx, e=1;
 				if(kb[VK_RIGHT	]&&oe->active)	oe->surfaces[1].pos+=dx, e=1;
 			}
-			else if(kb['4']||kb[VK_NUMPAD4])//separation
+			else if(kb['4']||kb[VK_NUMPAD4])//right radius: note: right radius is flipped
 			{
-				if(kb[VK_LEFT	]&&oe->active)	change_diopter(&oe->surfaces[1].radius, 0.01*dx), e=1;
-				if(kb[VK_RIGHT	]&&oe->active)	change_diopter(&oe->surfaces[1].radius, -0.01*dx), e=1;
+				if(kb[VK_LEFT	]&&oe->active)	change_diopter(&oe->surfaces[1].radius, -0.01*dx), e=1;
+				if(kb[VK_RIGHT	]&&oe->active)	change_diopter(&oe->surfaces[1].radius, 0.01*dx), e=1;
 			}
 			else if(kb['5']||kb[VK_NUMPAD5])//refractive index
 			{
