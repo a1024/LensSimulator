@@ -580,12 +580,15 @@ ArrayHandle		elements=0, ebackup=0,//arrays of OpticElem
 				order=0,//array of AreaIdx
 				photons=0;//array of Photon
 AreaIdx			initial_target={0};
-int				nwavelengths=3, nrays=10;
+int				nrays=10,
+				in_path_count=0,
+				out_path_count=0,
+				no_focus=0;
 double			tan_tilt=0,//rays tilt
-				total_blur=0,
-				spread=0;//main loss value
+				x_sensor=0,//x-coordinate of best sensor position
+				y_focus=0,
+				r_blur=0;//main loss value
 
-ArrayHandle		ray_spread_mean=0;//array of Point, an extra last element is centroid
 double			*history=0;
 int				hist_idx=0, history_enabled=1;
 
@@ -1302,6 +1305,17 @@ finish:
 }
 #undef			EXPECT
 #define			EXPECT(CH)		if(text->data[idx]!=(CH)){LOG_ERROR("%s(%d): Expected \'%c\'", filename, lineno, CH); success=0; goto finish;} ++idx;
+void			init_system()
+{
+	array_clear(&elements);
+	ARRAY_ALLOC(OpticElem, elements, 0, 0, 0, 0);
+	
+	array_clear(&photons);
+	ARRAY_ALLOC(Photon, photons, 0, 0, 0, free_photon);
+
+	array_clear(&order);
+	ARRAY_ALLOC(AreaIdx, order, 0, 0, 0, 0);
+}
 int				open_system(const char *filename)
 {
 	ArrayHandle text;
@@ -1341,14 +1355,7 @@ int				open_system(const char *filename)
 	if(!text)
 		return 0;
 
-	array_clear(&elements);
-	ARRAY_ALLOC(OpticElem, elements, 0, 0, 0, 0);
-	
-	array_clear(&photons);
-	ARRAY_ALLOC(Photon, photons, 0, 0, 0, free_photon);
-
-	array_clear(&order);
-	ARRAY_ALLOC(AreaIdx, order, 0, 0, 0, 0);
+	init_system();
 
 	for(int idx=0, lineno=0, linestart=0;;)
 	{
@@ -1718,7 +1725,7 @@ int		collinear(Point const *a, Point const *b, Point const *c)
 	if(!disc)
 		return 1;
 	double dist=(dx*(a->y-c->y)-dy*(a->x-c->x))/sqrt(disc);
-	return abs(dist)<1e-5;
+	return fabs(dist)<1e-5;
 }
 
 int		calc_interaction(SurfaceType type, int active, double n_before, double n_after, double cos_in, double sin_in, double *cos_em, double *sin_em)
@@ -1746,7 +1753,7 @@ int		calc_interaction(SurfaceType type, int active, double n_before, double n_af
 				//*cos_em=sqrt(1-*sin_em**sin_em);
 			}
 		}
-		else
+		else//extend
 		{
 			*cos_em=cos_in;
 			*sin_em=sin_in;
@@ -1925,6 +1932,8 @@ void			get_params(OpticElem const *e1, AreaIdx *aidx, double lambda, double *ap_
 }
 void			simulate()//number of rays must be even, always double-sided
 {
+	ArrayHandle intersections;
+
 	if(!elements||!elements->count)
 	{
 		LOG_ERROR("Elements array is empty");//optical device unknown
@@ -2036,8 +2045,10 @@ void			simulate()//number of rays must be even, always double-sided
 	for(int ko=0;ko<(int)order->count;++ko)//for each areidx in list order
 	{
 		aidx=(AreaIdx*)array_at(&order, ko);
-		//if(aidx->e_idx==1&&aidx->is_right_not_left==0&&aidx->is_outer_not_inner==0)
-		//	aidx=aidx;
+
+		if(aidx->e_idx==1&&aidx->is_right_not_left==1)//
+			aidx=aidx;
+
 		e1=(OpticElem*)array_at(&elements, aidx->e_idx);//fetch next element
 		for(int kp=0;kp<(int)photons->count;++kp)
 		{
@@ -2057,8 +2068,6 @@ void			simulate()//number of rays must be even, always double-sided
 					continue;
 				if(hit)
 				{
-					//if(!collinear(in_ray, in_ray+1, em_ray))//em_ray[0] must be collinear with in_ray
-					//	LOG_ERROR("Ray extension not collinear");
 					in_ray[1]=em_ray[0];
 					ARRAY_APPEND(path->points, em_ray+1, 1, 1, 0);
 				}
@@ -2068,8 +2077,49 @@ void			simulate()//number of rays must be even, always double-sided
 		}
 	}
 
-	//extend emerging rays
-#if 1
+
+	ARRAY_ALLOC(Point, intersections, 0, 0, 0, 0);
+	
+	no_focus=0;
+	if(tan_tilt==0)//update sensor position
+	{
+		//calculate intersections of emergent ray pairs
+		for(int kp=0;kp<(int)photons->count;++kp)
+		{
+			Photon *ph=(Photon*)array_at(&photons, kp);
+			for(int kp2=0;kp2<(int)ph->paths->count;kp2+=2)//for each symmetric ray couple
+			{
+				Path
+					*path1=(Path*)array_at(&ph->paths, kp2),
+					*path2=(Path*)array_at(&ph->paths, kp2+1);
+				if(!path1->emerged||!path2->emerged)
+					continue;
+				Point
+					*line1=(Point*)array_at(&path1->points, path1->points->count-2),
+					*line2=(Point*)array_at(&path2->points, path2->points->count-2);
+
+				double
+					dy1=fabs(line1[0].y-line2[0].y),
+					dy2=fabs(line1[1].y-line2[1].y);
+				if(dy1<dy2)//skip if divergent
+					continue;
+				Point *cross=(Point*)ARRAY_APPEND(intersections, 0, 1, 1, 0);
+				intersect_lines(line1, line2, cross);
+			}
+		}
+
+		if(!intersections->count)
+			x_sensor=100, no_focus=1;
+		else
+		{
+			//calculate mean & standard deviation of symmetric intersections
+			meanvar((double*)intersections->data, (int)intersections->count, 2, &x_sensor, 0);
+			array_clear(&intersections);
+		}
+	}
+
+	//extend emerging rays to reach sensor
+	double em_ray_xend=x_sensor+10;
 	for(int kp=0;kp<(int)photons->count;++kp)
 	{
 		Photon *ph=(Photon*)array_at(&photons, kp);
@@ -2079,11 +2129,55 @@ void			simulate()//number of rays must be even, always double-sided
 			if(!path->emerged)
 				continue;
 			Point *line=(Point*)array_at(&path->points, path->points->count-2);
-			line[1].x=line[0].x+100*(line[1].x-line[0].x);
-			line[1].y=line[0].y+100*(line[1].y-line[0].y);
+
+			double dx=line[1].x-line[0].x;
+			if(!dx||(em_ray_xend-line[0].x<0)!=(dx<0))//don't extend ray to sensor if vertical or the sensor is behind
+				continue;
+			line[1].x=em_ray_xend;
+			line[1].y=line[0].y+(em_ray_xend-line[0].x)*(line[1].y-line[0].y)/dx;
+
+			//line[1].x=line[0].x+100*(line[1].x-line[0].x);
+			//line[1].y=line[0].y+100*(line[1].y-line[0].y);
 		}
 	}
-#endif
+	
+	//calculate intersections of emergent rays with sensor
+	Point sensorPlane[2]=
+	{
+		{x_sensor, -10},
+		{x_sensor, 10},
+	};
+	in_path_count=nrays*(int)photons->count;
+	out_path_count=0;
+	for(int kp=0;kp<(int)photons->count;++kp)
+	{
+		Photon *ph=(Photon*)array_at(&photons, kp);
+		for(int kp2=0;kp2<(int)ph->paths->count;++kp2)//for each ray
+		{
+			Path *path=(Path*)array_at(&ph->paths, kp2);
+			if(!path->emerged)
+				continue;
+			Point *line=(Point*)array_at(&path->points, path->points->count-2);
+
+			double dx=line[1].x-line[0].x;
+			if(!dx||(dx<0)==(line[0].x<x_sensor))
+				continue;
+			Point *cross=(Point*)ARRAY_APPEND(intersections, 0, 1, 1, 0);
+			intersect_lines(line, sensorPlane, cross);
+			++out_path_count;
+		}
+	}
+	meanvar((double*)intersections->data+1, (int)intersections->count, 2, &y_focus, &r_blur);
+	r_blur=sqrt(r_blur);
+
+	if(!no_focus&&history_enabled)//update h i s t o r y
+	{
+		history[hist_idx]=r_blur;
+		++hist_idx, hist_idx%=w;
+	}
+
+	//cleanup
+	array_free(&intersections);
 }
 #if 0
 double			eval(GlassElem *elements, int ge_count, int nrays, int n_count, double aperture, double xend, double tan_tilt)
@@ -2297,7 +2391,7 @@ double			eval(GlassElem *elements, int ge_count, int nrays, int n_count, double 
 #endif
 double			calc_loss()
 {
-	return spread;
+	return r_blur;
 
 	//double focal_length=100;
 	//focal_length-=ray_spread_mean[n_count>>1];
@@ -2495,7 +2589,8 @@ void			draw_curve(Point *points, int npoints, ScaleConverter *scale)
 			MoveToEx(ghMemDC, x1, y1, 0);
 			LineTo(ghMemDC, x2, y2);
 		}
-		Ellipse(ghMemDC, x2-10, y2-10, x2+10, y2+10);//
+		//else
+		//	Ellipse(ghMemDC, x2-10, y2-10, x2+10, y2+10);
 		x1=x2;
 		y1=y2;
 	}
@@ -2615,16 +2710,23 @@ void			render()
 			DeleteObject(tempPen);
 		}
 		{
-			Point *point=(Point*)array_back(&ray_spread_mean);
-			if(point)
-			{
-				int xcenter=real2screenX(point->x, scale),
-					ycenter=real2screenY(point->y, scale);
-				int rx=(int)(total_blur*Xr), ry=(int)(total_blur*Yr);
-				Ellipse(ghMemDC, xcenter-rx, ycenter-ry, xcenter+rx, ycenter+ry);//combined blur circle
-			}
+			int xcenter=real2screenX(x_sensor, scale),
+				ycenter=real2screenY(y_focus, scale);
+			int rx=(int)(r_blur*Xr), ry=(int)(r_blur*Yr);
+			Ellipse(ghMemDC, xcenter-rx, ycenter-ry, xcenter+rx, ycenter+ry);//combined blur circle
 		}
 		hBrushHollow=(HBRUSH)SelectObject(ghMemDC, hBrushHollow);
+
+		{//draw sensor
+			int xs=real2screenX(x_sensor, scale), y1, y2;
+			double y=fabs(y_focus);
+			if(y<10)
+				y=10;
+			y1=real2screenY(y, scale);
+			y2=real2screenY(-y, scale);
+			MoveToEx(ghMemDC, xs, y1, 0);
+			LineTo(ghMemDC, xs, y2);
+		}
 
 		if(!clearScreen)
 		{
@@ -2694,8 +2796,11 @@ void			render()
 			{
 				OpticElem *oe=(OpticElem*)array_at(&elements, ke);
 				double th=oe->surfaces[1].pos-oe->surfaces[0].pos;
-				GUITPrint(ghMemDC, 0, y, 0, "%s  %c: %c\t%g\t%g\t%g\t%g\t%g%s", current_elem==ke?"->":" ", 'A'+ke, oe->active?'V':'X', oe->surfaces[0].pos, oe->surfaces[0].radius, th, -oe->surfaces[1].radius, oe->n, current_elem==ke?"\t<-":""), y+=16;
+				GUITPrint(ghMemDC, 0, y, 0, "%s %c\t%g\t%g\t%g\t%g\t%g  %s%s", current_elem==ke?"->":" ", oe->active?'V':'X', oe->surfaces[0].pos, oe->surfaces[0].radius, th, -oe->surfaces[1].radius, oe->n, (char*)oe->name->data, current_elem==ke?"\t<-":""), y+=16;
 			}
+			y+=16;
+			GUITPrint(ghMemDC, 0, y, 0, "\tSensor: %d/%d rays  Std.Dev %lfmm%s", out_path_count, in_path_count, r_blur, no_focus?"\tNO FOCUS":""), y+=32;
+#if 0
 			Point *point=(Point*)array_at(&ray_spread_mean, (int)photons->count);
 			if(point)
 			{
@@ -2704,8 +2809,9 @@ void			render()
 				OpticElem *oe=(OpticElem*)array_at(&elements, aidx->e_idx);
 				double ap=oe->surfaces[aidx->is_right_not_left].r_max[1];
 				y=h-16*6;
-				GUITPrint(ghMemDC, 0, y, 0, "D %gcm, F %gcm, f/%g\t Std.Dev %lfmm", ap, focus, focus/ap, 10*spread), y+=16;
+				GUITPrint(ghMemDC, 0, y, 0, "D %gcm, F %gcm, f/%g\t Std.Dev %lfmm", ap, focus, focus/ap, r_blur), y+=16;
 			}
+#endif
 
 			int txtColor0=GetTextColor(ghMemDC);
 			for(int kp=0;kp<(int)photons->count;++kp)
@@ -2797,8 +2903,9 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			else if(kb['2']||kb[VK_NUMPAD2])//left radius
 			{
 				int allow_mod=oe->active||oe->surfaces[0].type[0]==SURF_MIRROR||oe->surfaces[0].type[1]==SURF_MIRROR;
-				if(allow_mod&&kb[VK_LEFT	])	change_diopter(&oe->surfaces[0].radius, -0.01*dx), e=1;//can be modified when inactive because of mirrors
-				if(allow_mod&&kb[VK_RIGHT	])	change_diopter(&oe->surfaces[0].radius, 0.01*dx), e=1;
+				double delta=kb[VK_SHIFT]?0.01*dx:0.001*dx;
+				if(allow_mod&&kb[VK_LEFT	])	change_diopter(&oe->surfaces[0].radius, -delta), e=1;//can be modified when inactive because of mirrors
+				if(allow_mod&&kb[VK_RIGHT	])	change_diopter(&oe->surfaces[0].radius, delta), e=1;
 			}
 			else if(kb['3']||kb[VK_NUMPAD3])//thickness
 			{
@@ -2808,8 +2915,9 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			else if(kb['4']||kb[VK_NUMPAD4])//right radius: note: right radius is flipped
 			{
 				int allow_mod=oe->active||oe->surfaces[1].type[0]==SURF_MIRROR||oe->surfaces[1].type[1]==SURF_MIRROR;
-				if(allow_mod&&kb[VK_LEFT	])	change_diopter(&oe->surfaces[1].radius, -0.01*dx), e=1;//can be modified when inactive because of mirrors
-				if(allow_mod&&kb[VK_RIGHT	])	change_diopter(&oe->surfaces[1].radius, 0.01*dx), e=1;
+				double delta=kb[VK_SHIFT]?0.01*dx:0.001*dx;
+				if(allow_mod&&kb[VK_LEFT	])	change_diopter(&oe->surfaces[1].radius, -delta), e=1;//can be modified when inactive because of mirrors
+				if(allow_mod&&kb[VK_RIGHT	])	change_diopter(&oe->surfaces[1].radius, delta), e=1;
 			}
 			else if(kb['5']||kb[VK_NUMPAD5])//refractive index
 			{
@@ -3010,6 +3118,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				"\n"
 				"Shift R: Reset all glass elements\n"
 				"1/2/3/4/5 R: Reset corresponding property of current glass element\n"
+				"Alt R: Reset ray tilt\n"
 				"\n"
 				"A +/-/Enter/Backspace: Change aperture\n"
 				"Ctrl +/-/Enter/Backspace: Shift wavelengths\n"
@@ -3029,6 +3138,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				{
 					free_elements(&ebackup);
 					ebackup=array_copy(&elements);
+					tan_tilt=0;
 					simulate();
 				}
 				else
@@ -3101,11 +3211,8 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			}
 			break;
 		case 'T':
-			{
-				Point *p=(Point*)array_at(&ray_spread_mean, photons->count);
-				VX=p->x;
-				VY=p->y;
-			}
+			VX=x_sensor;
+			VY=y_focus;
 			break;
 		//case 'M':
 		//	twosides=!twosides;
@@ -3131,7 +3238,12 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				int e=0;
 				OpticElem *oe=(OpticElem*)array_at(&elements, current_elem);
 				OpticElem *oe0=(OpticElem*)array_at(&ebackup, current_elem);
-				if(kb[VK_SHIFT])
+				if(kb[VK_MENU])
+				{
+					tan_tilt=0;
+					e=1;
+				}
+				else if(kb[VK_SHIFT])
 				{
 					memcpy(elements, ebackup, elements->count*sizeof(OpticElem));
 					tan_tilt=0;
@@ -3225,8 +3337,8 @@ int __stdcall	WinMain(HINSTANCE hInstance, HINSTANCE hPrev, char *cmdargs, int n
 	RegisterClassExA(&wndClassEx);
 	ghWnd=CreateWindowExA(0, wndClassEx.lpszClassName, "Optics Simulator", WS_CAPTION|WS_SYSMENU|WS_THICKFRAME|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_CLIPCHILDREN, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, 0, 0, hInstance, 0);//20220504
 	
-		if(__argc==2)
-			open_system(__argv[1]);
+		if(__argc!=2||!open_system(__argv[1]))
+			init_system();
 		//if(!open_system())
 		//	return 1;
 		wnd_resize();
