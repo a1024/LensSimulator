@@ -1523,7 +1523,7 @@ int				open_system(const char *filename)
 					goto finish;
 				}
 				success=parse_number(filename, text, &idx, &lineno, &linestart, 0, &f_nrays);
-				nrays=(int)f_nrays;
+				nrays=(int)f_nrays<<1;
 				if(skip_ws(text, &idx, &lineno, &linestart))
 				{
 					LOG_ERROR("%s(%d): Expected a number", filename, lineno);
@@ -2849,6 +2849,9 @@ void			render()
 			}
 
 			int y=0;
+#if 1
+			GUITPrint(ghMemDC, 0, y, 0, "F1:  Controls"), y+=32;
+#else
 			GUITPrint(ghMemDC, 0, y, 0, "Shift +/-\t\ttilt"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "Crtl +/-\t\tchange wavelength"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "T\t\tcenter at focus"), y+=16;
@@ -2860,13 +2863,14 @@ void			render()
 			GUITPrint(ghMemDC, 0, y, 0, "4+left/right\tchange right radius"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "F\t\tflip glass element"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "O\t\toptimize"), y+=48;
+#endif
 
 			GUITPrint(ghMemDC, 0, y, 0, "\t1 dist\t2 Rl\t3 Th\t4 Rr\t5 n"), y+=32;
 			for(int ke=0;ke<(int)elements->count;++ke)
 			{
 				OpticElem *oe=(OpticElem*)array_at(&elements, ke);
 				double th=oe->surfaces[1].pos-oe->surfaces[0].pos;
-				GUITPrint(ghMemDC, 0, y, 0, "%s %c\t%g\t%g\t%g\t%g\t%g  %s%s", current_elem==ke?"->":" ", oe->active?'V':'X', oe->surfaces[0].pos, oe->surfaces[0].radius, th, -oe->surfaces[1].radius, oe->n, (char*)oe->name->data, current_elem==ke?"\t<-":""), y+=16;
+				GUITPrint(ghMemDC, 0, y, 0, "  %s %c\t%g\t%g\t%g\t%g\t%g  %s%s", current_elem==ke?"->":" ", oe->active?'V':'X', oe->surfaces[0].pos, oe->surfaces[0].radius, th, -oe->surfaces[1].radius, oe->n, (char*)oe->name->data, current_elem==ke?"\t<-":""), y+=16;
 			}
 			y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "\tSensor: %d/%d rays  Std.Dev %lfmm%s", out_path_count, in_path_count, 10*r_blur, no_system?"\t\tNO SYSTEM":(no_focus?"\t\tNO FOCUS":"")), y+=32;
