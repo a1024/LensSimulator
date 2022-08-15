@@ -2850,7 +2850,7 @@ void			render()
 
 			int y=0;
 #if 1
-			GUITPrint(ghMemDC, 0, y, 0, "F1:  Controls"), y+=32;
+			GUITPrint(ghMemDC, 0, y, 0, "PRESS F1 FOR HELP"), y+=32;
 #else
 			GUITPrint(ghMemDC, 0, y, 0, "Shift +/-\t\ttilt"), y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "Crtl +/-\t\tchange wavelength"), y+=16;
@@ -3217,6 +3217,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				"R: Reset view\n"
 				"E: Reset scale\n"
 				"C: Toggle clear screen\n"
+				"Ctrl O: Open a preset\n"
 				"\n"
 				"Tab / Shift Tab: Select glass element\n"
 				"Space: Toggle glass element\n"
@@ -3228,9 +3229,9 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				"4 left/right: Change right diopter\n"
 				"5 left/right: Change refractive index\n"
 				"Speed of change depends on zoom level\n"
+				"1/2/3/4/5 S: Set value of corresponding property\n"
 				"\n"
 				"Shift R: Reset all glass elements\n"
-				"1/2/3/4/5 S: Set value of corresponding property\n"
 				"1/2/3/4/5 R: Reset corresponding property of current glass element\n"
 				"Alt R: Reset ray tilt\n"
 				"\n"
