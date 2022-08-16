@@ -8,6 +8,7 @@ n:		refractive index
 pos:		x-distance from origin
 th:		thickness
 left, right:	surface specifications
+plane:		planar surface
 mirror/transp/hole: surface type (transp is default)
 
 light:	wavelength list in nanometers (nm)
@@ -22,22 +23,20 @@ dimensions:	mm, cm (default), m, inch, ft
 wavelength:	A (Angestrom), nm (default)
 */
 
-//maksutov-cassegrain telescope
-elem	corrector, n=1.512, ap=12cm, pos=10cm, th=1cm;
-	left	=-15cm;
-	right	=16cm: mirror, 2cm, transp;
 
-elem	primary, n=1.512, ap=12.5cm, pos=corrector+13.5cm, th=1cm;
-	left	=-37cm: transp, 2cm, mirror;
-	right	=plane;
+//Newtonian telescope
+
+elem	secondary, n=1.512, ap=4cm, pos=10cm, th=1cm;
+	left	=-15cm;
+	right	=plane: mirror;
+
+elem	primary, n=1.512, ap=12cm, pos=50cm, th=1cm;
+	left	=-110cm: hole, 2cm, mirror;
+	right	=plane: hole, 2cm, transp;
 
 light:	470nm, 550nm, 640nm;	//blue, green, red
-rays:	10, corrector.right.outer;
+rays:	10, primary.left.outer;
 
 path:
-	corrector.left,
-	corrector.right.outer,
 	primary.left.outer,
-	corrector.right.inner,
-	primary.left.inner,
-	primary.right;
+	secondary.right;

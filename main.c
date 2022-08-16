@@ -2104,7 +2104,7 @@ void			simulate()//number of rays must be even, always double-sided
 			ARRAY_ALLOC(Point, path->points, 0, 0, 0, 0);
 			Point *points=ARRAY_APPEND(path->points, 0, 2, 1, 0);
 			points->x=xstart;
-			points->y=ymin+(kp2>>1)*(ymax-ymin)/(ph->paths->count>>1)+0.5;
+			points->y=ymin+((kp2>>1)+1)*(ymax-ymin)/((ph->paths->count>>1)+1);
 			if(kp2&1)//rays are in pairs mirrored by ground line
 				points->y=-points->y;
 			path->emerged=intersect_ray_surface(xstart, points->y, xstart+xlength, points->y, ymin, ymax, surface->pos, surface->radius, points+1);//must hit
@@ -2715,7 +2715,7 @@ void			render()
 			OpticElem *oe=(OpticElem*)array_at(&elements, ke);
 
 			//draw inner area
-			if(oe->active||oe->surfaces[0].type[0]==SURF_MIRROR)
+			if(oe->surfaces[0].type[0]!=SURF_HOLE&&(oe->active||oe->surfaces[0].type[0]==SURF_MIRROR))//left side
 			{
 				if(oe->surfaces[0].type[0]==SURF_MIRROR)
 					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
@@ -2723,7 +2723,7 @@ void			render()
 				if(oe->surfaces[0].type[0]==SURF_MIRROR)
 					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
 			}
-			if(oe->active||oe->surfaces[1].type[0]==SURF_MIRROR)
+			if(oe->surfaces[1].type[0]!=SURF_HOLE&&(oe->active||oe->surfaces[1].type[0]==SURF_MIRROR))//right side
 			{
 				if(oe->surfaces[1].type[0]==SURF_MIRROR)
 					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
@@ -2733,7 +2733,7 @@ void			render()
 			}
 
 			//draw outer area
-			if(oe->active||oe->surfaces[0].type[1]==SURF_MIRROR)
+			if(oe->surfaces[0].type[1]!=SURF_HOLE&&(oe->active||oe->surfaces[0].type[1]==SURF_MIRROR))//left side
 			{
 				if(oe->surfaces[0].type[1]==SURF_MIRROR)
 					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
@@ -2741,7 +2741,7 @@ void			render()
 				if(oe->surfaces[0].type[1]==SURF_MIRROR)
 					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
 			}
-			if(oe->active||oe->surfaces[1].type[1]==SURF_MIRROR)
+			if(oe->surfaces[1].type[1]!=SURF_HOLE&&(oe->active||oe->surfaces[1].type[1]==SURF_MIRROR))//right side
 			{
 				if(oe->surfaces[1].type[1]==SURF_MIRROR)
 					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
@@ -3010,8 +3010,10 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			OpticElem *oe=(OpticElem*)array_at(&elements, current_elem);
 			if(kb['1']||kb[VK_NUMPAD1])//position
 			{
-				if(kb[VK_LEFT	]&&oe->active)	oe->surfaces[0].pos-=dx, oe->surfaces[1].pos-=dx, e=1;
-				if(kb[VK_RIGHT	]&&oe->active)	oe->surfaces[0].pos+=dx, oe->surfaces[1].pos+=dx, e=1;
+				int allow_mod=oe->active||oe->surfaces[0].type[0]==SURF_MIRROR||oe->surfaces[0].type[1]==SURF_MIRROR;
+				double delta=kb[VK_SHIFT]?dx:10*dx;
+				if(allow_mod&&kb[VK_LEFT	])	oe->surfaces[0].pos-=delta, oe->surfaces[1].pos-=delta, e=1;
+				if(allow_mod&&kb[VK_RIGHT	])	oe->surfaces[0].pos+=delta, oe->surfaces[1].pos+=delta, e=1;
 			}
 			else if(kb['2']||kb[VK_NUMPAD2])//left radius
 			{
@@ -3025,7 +3027,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				if(kb[VK_LEFT	]&&oe->active)	oe->surfaces[1].pos-=dx, e=1;
 				if(kb[VK_RIGHT	]&&oe->active)	oe->surfaces[1].pos+=dx, e=1;
 			}
-			else if(kb['4']||kb[VK_NUMPAD4])//right radius: note: right radius is flipped
+			else if(kb['4']||kb[VK_NUMPAD4])//right radius (flipped)
 			{
 				int allow_mod=oe->active||oe->surfaces[1].type[0]==SURF_MIRROR||oe->surfaces[1].type[1]==SURF_MIRROR;
 				double delta=kb[VK_SHIFT]?0.01*dx:0.001*dx;
@@ -3217,8 +3219,8 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				"R: Reset view\n"
 				"E: Reset scale\n"
 				"C: Toggle clear screen\n"
-				"Ctrl O: Open a preset\n"
 				"\n"
+				"Ctrl O: Open a preset\n"
 				"Tab / Shift Tab: Select glass element\n"
 				"Space: Toggle glass element\n"
 				"F: Flip glass element\n"
