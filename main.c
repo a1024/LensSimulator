@@ -810,7 +810,7 @@ Photon			lightpaths[PH_COUNT]={{470}, {550}, {640}};//a photon of same color can
 //const int		n_count=SIZEOF(lightpaths);
 double			total_blur=0;
 //double		lambda0=0, lambda=590;//565nm
-int				twosides=1;//simulate rays above and below x-axis
+int				twosides=1;//s i m u l a t e rays above and below x-axis
 
 int				nrays=5;
 double			tan_tilt=0;
@@ -1720,6 +1720,7 @@ int				open_system(const char *filename)
 	}
 finish:
 	array_free(&text);
+	SetWindowTextA(ghWnd, filename);
 	return success;
 }
 
@@ -2189,7 +2190,6 @@ void			simulate()//number of rays must be even, always double-sided
 	}
 
 	//extend emerging rays to reach sensor
-	double em_ray_xend=x_sensor+10;
 	for(int kp=0;kp<(int)photons->count;++kp)
 	{
 		Photon *ph=(Photon*)array_at(&photons, kp);
@@ -2201,10 +2201,10 @@ void			simulate()//number of rays must be even, always double-sided
 			Point *line=(Point*)array_at(&path->points, path->points->count-2);
 
 			double dx=line[1].x-line[0].x;
-			if(!dx||(em_ray_xend-line[0].x<0)!=(dx<0))//don't extend ray to sensor if vertical or the sensor is behind
+			if(!dx||(x_sensor-line[0].x<0)!=(dx<0))//don't extend ray to sensor if vertical or the sensor is behind
 				continue;
-			line[1].x=em_ray_xend;
-			line[1].y=line[0].y+(em_ray_xend-line[0].x)*(line[1].y-line[0].y)/dx;
+			line[1].x=x_sensor+10*sgn_star(line[1].x-line[0].x);
+			line[1].y=line[0].y+(line[1].x-line[0].x)*(line[1].y-line[0].y)/dx;
 
 			//line[1].x=line[0].x+100*(line[1].x-line[0].x);
 			//line[1].y=line[0].y+100*(line[1].y-line[0].y);
@@ -2873,7 +2873,7 @@ void			render()
 				GUITPrint(ghMemDC, 0, y, 0, "  %s %c\t%g\t%g\t%g\t%g\t%g  %s%s", current_elem==ke?"->":" ", oe->active?'V':'X', oe->surfaces[0].pos, oe->surfaces[0].radius, th, -oe->surfaces[1].radius, oe->n, (char*)oe->name->data, current_elem==ke?"\t<-":""), y+=16;
 			}
 			y+=16;
-			GUITPrint(ghMemDC, 0, y, 0, "\tSensor: %d/%d rays  Std.Dev %lfmm%s", out_path_count, in_path_count, 10*r_blur, no_system?"\t\tNO SYSTEM":(no_focus?"\t\tNO FOCUS":"")), y+=32;
+			GUITPrint(ghMemDC, 0, y, 0, "\tSensor: %d/%d rays  Std.Dev %lfmm  blurSize=%lfmm%s", out_path_count, in_path_count, 10*r_blur, 20*r_blur, no_system?"\t\tNO SYSTEM":(no_focus?"\t\tNO FOCUS":"")), y+=32;
 #if 0
 			Point *point=(Point*)array_at(&ray_spread_mean, (int)photons->count);
 			if(point)
