@@ -26,17 +26,12 @@ wavelength:	A (Angestrom), nm (default)
 
 //Newtonian telescope
 
-elem	secondary, n=1.512, ap=4cm, pos=10cm, th=1cm;
-	left	=-15cm;
-	right	=plane: mirror;
+elem	primary, n=1.512, ap=12cm, pos=100cm, th=1cm;
+	left	=-200cm: mirror;	//-110
+	right	=plane: transp;
 
-elem	primary, n=1.512, ap=12cm, pos=50cm, th=1cm;
-	left	=-110cm: hole, 2cm, mirror;
-	right	=plane: hole, 2cm, transp;
-
-light:	470nm, 550nm, 640nm;	//blue, green, red
-rays:	10, primary.left.outer;
+light:	640nm;	//blue, green, red
+rays:	10, primary.left;
 
 path:
-	primary.left.outer,
-	secondary.right;
+	primary.left;

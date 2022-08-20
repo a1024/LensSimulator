@@ -22,19 +22,18 @@ dimensions:	mm, cm (default), m, inch, ft
 wavelength:	A (Angestrom), nm (default)
 */
 
-elem	objective, n=1.512, ap=12cm, pos=0, th=0.8cm;
-	left	=51.2cm;
-	right	=plane;
+//elem	corrector, n=1.512, ap=12cm, pos=10cm, th=1cm;
+//	left	=-15cm;
+//	right	=16cm: mirror, 2cm, transp;
 
-elem	corrector, n=1.512, ap=12cm, pos=18.8cm, th=1cm;
-	left	=16cm;
-	right	=-15cm;
+elem	primary, n=1.512, ap=16cm, pos=50cm, th=1.6cm;
+	left	=-26cm;
+	right	=100cm: mirror;
 
-light:	640nm;	//red
-rays:	10, objective.left;
+light:	470nm, 550nm, 640nm;	//blue, green, red
+rays:	10, primary.left;
 
 path:
-	objective.left,
-	objective.right,
-	corrector.left,
-	corrector.right;
+	primary.left,
+	primary.right,
+	primary.left;

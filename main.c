@@ -170,6 +170,7 @@ void 			memswap(void *p1, void *p2, size_t size, void *temp)
 	memcpy(p2, temp, size);
 }
 void			negate(double *x){*x=-*x;}
+double			maximum(double a, double b){return a<b?b:a;}
 
 char			error_msg[G_BUF_SIZE]={0};
 int				runtime_error(const char *file, int line, const char *format, ...)
@@ -514,7 +515,7 @@ typedef struct PhotonStruct
 	double lambda;//nm
 	int color;
 	ArrayHandle paths;//array of Path struct
-	Point ground[2], em_centroid;
+	//Point ground[2], em_centroid;
 } Photon;
 void			free_photon(void *data)
 {
@@ -2088,7 +2089,7 @@ void			simulate()//number of rays must be even, always double-sided
 		if(xmax<e1->surfaces[1].pos)
 			xmax=e1->surfaces[1].pos;
 	}
-	double xlength=xmax-xmin, xstart=xmin-xlength;
+	double xlength=xmax-xmin, xstart=xmin-10*xlength;
 
 	//initialize incident rays
 	AreaIdx *aidx=(AreaIdx*)array_at(&order, 0);
@@ -2494,12 +2495,27 @@ int				shift_lambdas(double delta)
 	}
 	return 1;
 }
-void			change_aperture(Surface *surface, double delta)
+void			change_aperture(OpticElem *oe, double factor)
 {
-	int same=surface->r_max[0]==surface->r_max[1];
-	surface->r_max[1]+=delta;
-	if(same)
-		surface->r_max[0]=surface->r_max[1];
+	oe->surfaces[0].r_max[0]*=factor;
+	oe->surfaces[0].r_max[1]*=factor;
+	oe->surfaces[1].r_max[0]*=factor;
+	oe->surfaces[1].r_max[1]*=factor;
+	//int same=surface->r_max[0]==surface->r_max[1];
+	//surface->r_max[1]+=delta;
+	//if(same)
+	//	surface->r_max[0]=surface->r_max[1];
+}
+void			change_aperture_all(double factor)
+{
+	for(int ke=0;ke<(int)elements->count;++ke)
+	{
+		OpticElem *oe=(OpticElem*)array_at(&elements, ke);
+		oe->surfaces[0].r_max[0]*=factor;
+		oe->surfaces[0].r_max[1]*=factor;
+		oe->surfaces[1].r_max[0]*=factor;
+		oe->surfaces[1].r_max[1]*=factor;
+	}
 }
 void			change_diopter(double *r, double delta)
 {
@@ -2758,6 +2774,7 @@ void			render()
 		hPenLens=(HPEN)SelectObject(ghMemDC, hPenLens);
 		
 		hBrushHollow=(HBRUSH)SelectObject(ghMemDC, hBrushHollow);
+#if 0
 		for(int kn=0;kn<(int)photons->count;++kn)				//draw blur circles
 		{
 			Photon *lp=(Photon*)array_at(&photons, kn);
@@ -2779,13 +2796,13 @@ void			render()
 			tempPen=(HPEN)SelectObject(ghMemDC, tempPen);
 			DeleteObject(tempPen);
 		}
+#endif
 		{
 			int xcenter=real2screenX(x_sensor, scale),
 				ycenter=real2screenY(y_focus, scale);
 			int rx=(int)(r_blur*Xr), ry=(int)(r_blur*Yr);
 			Ellipse(ghMemDC, xcenter-rx, ycenter-ry, xcenter+rx, ycenter+ry);//combined blur circle
 		}
-		hBrushHollow=(HBRUSH)SelectObject(ghMemDC, hBrushHollow);
 
 		{//draw sensor
 			int xs=real2screenX(x_sensor, scale), y1, y2;
@@ -2801,7 +2818,7 @@ void			render()
 		if(!clearScreen)
 		{
 			double histmax=-1;
-			for(int k=0;k<w;++k)
+			for(int k=0;k<w;++k)		//draw history
 			{
 				if(history[k]>=0&&(histmax==-1||histmax<history[k]))
 					histmax=history[k];
@@ -2817,12 +2834,20 @@ void			render()
 						LineTo(ghMemDC, k, h-(int)(history[k]*histmax));
 					}
 				}
+				int idx=hist_idx-1;
+				idx+=w&-(idx<0);
+				if(history[idx]>=0)
+				{
+					int tempy=h-(int)(history[idx]*histmax);
+					Ellipse(ghMemDC, idx-10, tempy-10, idx+10, tempy+10);
+				}
 			}
 
-			int H=(int)(VY-DY/2>0?h:VY+DY/2<0?-1:h*(VY/DY+.5)), HT=H+(H>h-30?-18:2), V=(int)(VX-DX/2>0?-1:VX+DX/2<0?w:w*(-VX+DX/2)/DX), VT=V+(int)(V>w-24-prec*8?-24-prec*8:2);
+			int H=(int)(VY-DY/2>0?h:VY+DY/2<0?-1:h*(VY/DY+.5)), HT=H+(H>h-30?-18:2),
+				V=(int)(VX-DX/2>0?-1:VX+DX/2<0?w:w*(-VX+DX/2)/DX), VT=V+(int)(V>w-24-prec*8?-24-prec*8:2);
 			int bkMode=GetBkMode(ghMemDC);
 			SetBkMode(ghMemDC, TRANSPARENT);
-			for(double x=floor((VX-DX/2)/Xstep)*Xstep, xEnd=ceil((VX+DX/2)/Xstep)*Xstep, Xstep_2=Xstep/2;x<xEnd;x+=Xstep)
+			for(double x=floor((VX-DX/2)/Xstep)*Xstep, xEnd=ceil((VX+DX/2)/Xstep)*Xstep, Xstep_2=Xstep/2;x<xEnd;x+=Xstep)//label the axes
 			{
 				if(x>-Xstep_2&&x<Xstep_2)
 					continue;
@@ -2838,15 +2863,18 @@ void			render()
 				double Y=((VY+DY/2)-y)*Yr;
 				TextOutA(ghMemDC, VT, (int)(Y)-(Y<0)+2, g_buf, linelen);
 			}
-			MoveToEx(ghMemDC, 0, H, 0), LineTo(ghMemDC, w, H), MoveToEx(ghMemDC, V, 0, 0), LineTo(ghMemDC, V, h);
+			MoveToEx(ghMemDC, 0, H, 0), LineTo(ghMemDC, w, H);//draw the axes
+			MoveToEx(ghMemDC, V, 0, 0), LineTo(ghMemDC, V, h);
 			SetBkMode(ghMemDC, bkMode);
 
+#if 0
 			for(int k=0;k<(int)photons->count;++k)//draw ray ground
 			{
 				Photon *lp=(Photon*)array_at(&photons, k);
 				MoveToEx(ghMemDC, real2screenX(lp->ground[0].x, scale), real2screenY(lp->ground[0].y, scale), 0);
 				LineTo(ghMemDC, real2screenX(lp->ground[1].x, scale), real2screenY(lp->ground[1].y, scale));
 			}
+#endif
 
 			int y=0;
 #if 1
@@ -2865,12 +2893,23 @@ void			render()
 			GUITPrint(ghMemDC, 0, y, 0, "O\t\toptimize"), y+=48;
 #endif
 
-			GUITPrint(ghMemDC, 0, y, 0, "\t1 dist\t2 Rl\t3 Th\t4 Rr\t5 n"), y+=32;
+			GUITPrint(ghMemDC, 0, y, 0, "\t1 dist\t2 Rl\t3 Th\t4 Rr\t5 n\t6 ap"), y+=32;
 			for(int ke=0;ke<(int)elements->count;++ke)
 			{
 				OpticElem *oe=(OpticElem*)array_at(&elements, ke);
 				double th=oe->surfaces[1].pos-oe->surfaces[0].pos;
-				GUITPrint(ghMemDC, 0, y, 0, "  %s %c\t%g\t%g\t%g\t%g\t%g  %s%s", current_elem==ke?"->":" ", oe->active?'V':'X', oe->surfaces[0].pos, oe->surfaces[0].radius, th, -oe->surfaces[1].radius, oe->n, (char*)oe->name->data, current_elem==ke?"\t<-":""), y+=16;
+				GUITPrint(ghMemDC, 0, y, 0, "  %s %c\t%g\t%g\t%g\t%g\t%g\t%g  %s%s",
+					current_elem==ke?"->":" ",
+					oe->active?'V':'X',
+					oe->surfaces[0].pos,
+					oe->surfaces[0].radius,
+					th,
+					-oe->surfaces[1].radius,
+					oe->n,
+					maximum(oe->surfaces[0].r_max[1], oe->surfaces[1].r_max[1])*2,//aperture = diameter
+					(char*)oe->name->data,
+					current_elem==ke?"\t<-":"");
+				y+=16;
 			}
 			y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "\tSensor: %d/%d rays  Std.Dev %lfmm  blurSize=%lfmm%s", out_path_count, in_path_count, 10*r_blur, 20*r_blur, no_system?"\t\tNO SYSTEM":(no_focus?"\t\tNO FOCUS":"")), y+=32;
@@ -2896,6 +2935,7 @@ void			render()
 			}
 			SetTextColor(ghMemDC, txtColor0);
 		}
+		hBrushHollow=(HBRUSH)SelectObject(ghMemDC, hBrushHollow);
 	}
 	
 	QueryPerformanceCounter(&li);
@@ -3006,7 +3046,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 	case WM_TIMER:
 		{
 			int e=0;
-			double dx=DX/w;
+			double dx=DX/w;//horizontal pixel size in real units: the more you zoom in, the finer is the change
 			OpticElem *oe=(OpticElem*)array_at(&elements, current_elem);
 			if(kb['1']||kb[VK_NUMPAD1])//position
 			{
@@ -3039,6 +3079,11 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				if(kb[VK_LEFT	]&&oe->active)	change_n(&oe->n, 0.01*dx), e=1;
 				if(kb[VK_RIGHT	]&&oe->active)	change_n(&oe->n, -0.01*dx), e=1;
 			}
+			else if(kb['6']||kb[VK_NUMPAD6])//aperture
+			{
+				if(kb[VK_LEFT	]&&oe->active)	change_aperture(oe, 1/(1+0.1*dx)), e=1;
+				if(kb[VK_RIGHT	]&&oe->active)	change_aperture(oe, 1+0.1*dx), e=1;
+			}
 			else if(_2d_drag_graph_not_window)
 			{
 				if(kb[VK_LEFT	])	VX+=10*DX/w;
@@ -3068,12 +3113,8 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				}
 				else if(kb['A'])
 				{
-					change_aperture(oe->surfaces, 0.1*dx);
-					change_aperture(oe->surfaces+1, 0.1*dx);
+					change_aperture_all(1+0.1*dx);
 					e=1;
-
-					//if(ap<100)
-					//	ap+=0.1, e=1;
 				}
 				else if(kb['X'])	DX/=1.05, AR_Y/=1.05;
 				else if(kb['Y'])	AR_Y*=1.05;
@@ -3095,11 +3136,8 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				}
 				else if(kb['A'])
 				{
-					change_aperture(oe->surfaces, -0.1*dx);
-					change_aperture(oe->surfaces+1, -0.1*dx);
+					change_aperture_all(1/(1+0.1*dx));
 					e=1;
-					//if(ap>0)
-					//	ap-=0.1, e=1;
 				}
 				else if(kb['X'])	DX*=1.05, AR_Y*=1.05;
 				else if(kb['Y'])	AR_Y/=1.05;
@@ -3230,21 +3268,22 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				"3 left/right: Change thickness\n"
 				"4 left/right: Change right diopter\n"
 				"5 left/right: Change refractive index\n"
+				"6 left/right: Change element aperture\n"
 				"Speed of change depends on zoom level\n"
-				"1/2/3/4/5 S: Set value of corresponding property\n"
+				"1~6 S: Set value of corresponding property\n"
 				"\n"
 				"Shift R: Reset all glass elements\n"
-				"1/2/3/4/5 R: Reset corresponding property of current glass element\n"
+				"1~6 R: Reset corresponding property of current glass element\n"
 				"Alt R: Reset ray tilt\n"
 				"\n"
-				"A +/-/Enter/Backspace: Change aperture\n"
+				"A +/-/Enter/Backspace: Change all apertures\n"
 				"Ctrl +/-/Enter/Backspace: Shift wavelengths\n"
 				"Shift +/-/Enter/Backspace: Change ray tilt\n"
 				"Ctrl Mousewheel: Change ray count\n"
 				"\n"
 				"H: Clear history buffer\n"
-				"O: Optimize\n"
-				"Shift O: Optimize excluding first element\n"
+				"O: Optimize current glass element\n"
+				"Shift O: Optimize all glass elements\n"
 				"\n"
 				"Built on: %s %s", __DATE__, __TIME__);
 			break;
@@ -3264,6 +3303,10 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 					elements=array_copy(&ebackup);
 				}
 			}
+			else if(kb[VK_SHIFT])
+			{
+			}
+#if 0
 			else//optimize
 			{
 				static double *grad=0, *velocity=0;
@@ -3289,6 +3332,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				update_params(velocity, var_idx, nvars, exclude_first);
 				simulate();
 			}
+#endif
 			break;
 		case 'S':
 			if(kb['1'])
@@ -3378,7 +3422,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				}
 				else if(kb[VK_SHIFT])
 				{
-					memcpy(elements, ebackup, elements->count*sizeof(OpticElem));
+					memcpy(elements->data, ebackup->data, elements->count*sizeof(OpticElem));
 					tan_tilt=0;
 					//ap=ap0;
 					//lambda=lambda0;
