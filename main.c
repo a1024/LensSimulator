@@ -726,13 +726,15 @@ double			lambda2n(double n_base, double lambda)
 
 void			free_elements(ArrayHandle *arr)
 {
-	for(int ke=0;ke<(int)arr[0]->count;++ke)
+	if(*arr)
 	{
-		OpticElem *oe=(OpticElem*)array_at(arr, ke);
-		array_free(&oe->name);
-		//free_opticElem(oe);
+		for(int ke=0;ke<(int)arr[0]->count;++ke)
+		{
+			OpticElem *oe=(OpticElem*)array_at(arr, ke);
+			array_free(&oe->name);
+		}
+		array_free(arr);
 	}
-	array_free(arr);
 }
 ArrayHandle		load_text(const char *filename, int pad)
 {
@@ -1625,6 +1627,16 @@ int				open_system(const char *filename)
 			}
 			break;
 		}
+	}
+	if(success)
+	{
+		free_elements(&ebackup);
+		ebackup=array_copy(&elements);
+	}
+	else
+	{
+		free_elements(&elements);
+		elements=array_copy(&ebackup);
 	}
 finish:
 	array_free(&text);
@@ -3160,15 +3172,8 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			{
 				if(open_system(0))
 				{
-					free_elements(&ebackup);
-					ebackup=array_copy(&elements);
 					tan_tilt=0;
 					simulate();
-				}
-				else
-				{
-					free_elements(&elements);
-					elements=array_copy(&ebackup);
 				}
 			}
 			else if(kb[VK_SHIFT])
