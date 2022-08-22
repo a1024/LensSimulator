@@ -2821,11 +2821,14 @@ void			wnd_resize()
 	w=R.right-R.left, h=R.bottom-R.top, centerP.x=w/2, centerP.y=h/2;
 	ClientToScreen(ghWnd, &centerP);
 
-	history=realloc(history, w*sizeof(double));
-	hist_idx%=w;
-	for(int k=hist_idx;k<w;++k)
-		history[k]=-1;
-	//memset(history+hist_idx, 0, (w-hist_idx)*sizeof(double));
+	if(w)
+	{
+		history=realloc(history, w*sizeof(double));
+		hist_idx%=w;
+		for(int k=hist_idx;k<w;++k)
+			history[k]=-1;
+		//memset(history+hist_idx, 0, (w-hist_idx)*sizeof(double));
+	}
 }
 void			set_attribute(int attrNo)
 {
@@ -2943,6 +2946,8 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				double delta=kb[VK_SHIFT]?10*dx:dx;
 				if(kb[VK_LEFT	]&&oe->active)	oe->surfaces[1].pos-=delta, e=1;
 				if(kb[VK_RIGHT	]&&oe->active)	oe->surfaces[1].pos+=delta, e=1;
+				if(oe->surfaces[1].pos<oe->surfaces[0].pos)
+					oe->surfaces[1].pos=oe->surfaces[0].pos, e=1;
 			}
 			if(kb['4']||kb[VK_NUMPAD4])//right radius (flipped)
 			{
