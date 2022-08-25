@@ -2780,7 +2780,45 @@ void			render()
 					}
 				}
 				if(!printed)
-					GUITPrint(ghMemDC, 0, y, 0, "\tap=%g, apeq=%g", ymax, ap);
+					GUITPrint(ghMemDC, 0, y, 0, "\tD=%g, Deq=%g", ymax, ap);
+				y+=16;
+			}
+			if(tan_tilt)
+			{
+				double
+					tilt=atan(tan_tilt)*(180/M_PI),
+					abs_tilt=fabs(tilt),
+
+					degrees=floor(abs_tilt),
+					tail=(abs_tilt-degrees)*60,
+					minutes=floor(tail),
+					seconds=(tail-minutes)*60;
+				const char *a=0;
+				abs_tilt*=2;
+					 if(abs_tilt<0.000333334)	a=" Ganymede-";
+				else if(abs_tilt<0.0005)		a=" Ganymede+";
+				else if(abs_tilt<0.000611112)	a=" Neptune-";
+				else if(abs_tilt<0.000666667)	a=" Neptune+";
+				else if(abs_tilt<0.000916667)	a=" Uranus-";
+				else if(abs_tilt<0.000972222)	a=" Mars-";
+				else if(abs_tilt<0.001138888)	a=" Uranus+";
+				else if(abs_tilt<0.00125)		a=" Mercury-";
+				else if(abs_tilt<0.00269444)	a=" Venus-";
+				else if(abs_tilt<0.00361111)	a=" Mercury+";
+				else if(abs_tilt<0.00402776)	a=" Saturn-";
+				else if(abs_tilt<0.00558334)	a=" Saturn+";
+				else if(abs_tilt<0.00697222)	a=" Mars+";
+				else if(abs_tilt<0.00827778)	a=" Jupiter-";
+				else if(abs_tilt<0.01391667)	a=" Jupiter+";
+				else if(abs_tilt<0.01833334)	a=" Venus+";
+				else if(abs_tilt<0.488334)		a=" Moon-";
+				else if(abs_tilt<0.458612)		a=" Sun-";
+				else if(abs_tilt<0.542222)		a=" Sun+";
+				else if(abs_tilt<0.568334)		a=" Moon+";
+				else if(abs_tilt<1)				a=" Andromeda-";
+				else if(abs_tilt<3.01667)		a=" Andromeda+";
+				else							a="";
+				GUITPrint(ghMemDC, 0, y, 0, "\tTilt = %gd %g\' %g\"%s", tilt, minutes, seconds, a);
 				y+=16;
 			}
 			y+=16;
