@@ -172,6 +172,7 @@ void 			memswap(void *p1, void *p2, size_t size, void *temp)
 }
 void			negate(double *x){*x=-*x;}
 double			maximum(double a, double b){return a<b?b:a;}
+double			minimum(double a, double b){return a<b?a:b;}
 
 char			error_msg[G_BUF_SIZE]={0};
 int				runtime_error(const char *file, int line, const char *format, ...)
@@ -577,7 +578,7 @@ double			tan_tilt=0,//rays tilt
 				r_blur=0;//main loss value
 
 double			*history=0;
-int				hist_idx=0, history_enabled=1;
+int				hist_idx=0;
 
 
 #if 1
@@ -1687,7 +1688,7 @@ void			print2str_surface(ArrayHandle *str, Surface *s, int is_right_not_left)
 		name="right", radius=-s->radius;
 	else
 		name="left", radius=s->radius;
-	print2str(str, "\t%s\t=%gcm: %s, %g, %s, %g;\n", name, radius, stypes[s->type[0]-1], s->r_max[0], stypes[s->type[1]-1], s->r_max[1]);
+	print2str(str, "\t%s\t=%gcm: %s, %gcm, %s, %gcm;\n", name, radius, stypes[s->type[0]-1], s->r_max[0], stypes[s->type[1]-1], s->r_max[1]);
 }
 void			print2str_aidx(ArrayHandle *str, AreaIdx *aidx)
 {
@@ -2033,7 +2034,7 @@ void			get_params(OpticElem const *e1, AreaIdx *aidx, double lambda, double *ap_
 	*radius=surface->radius;
 	*type=surface->type[aidx->is_outer_not_inner];
 }
-void			simulate()//number of rays must be even, always double-sided
+void			simulate(int user)//number of rays must be even, always double-sided
 {
 	ArrayHandle intersections;
 
@@ -2275,7 +2276,7 @@ void			simulate()//number of rays must be even, always double-sided
 	meanvar((double*)intersections->data+1, (int)intersections->count, 2, &y_focus, &r_blur);
 	r_blur=sqrt(r_blur);
 
-	if(!no_focus&&history_enabled)//update h i s t o r y
+	if(!no_focus&&user)//update h i s t o r y
 	{
 		history[hist_idx]=r_blur;
 		++hist_idx, hist_idx%=w;
@@ -2347,15 +2348,94 @@ void			change_n(double *n, double delta)
 		return;
 	*n+=delta;
 }
-void			change_var(OpticElem *oe, int idx, double delta)
+
+//optimizer
+int				argmin_quadratic(Point *p, double *ret_x)
 {
-	//idx: {left.pos, left.radius, right.pos, right.radius}
-	Surface *s=oe->surfaces+(idx>>1);
-	if(idx&1)
-		change_diopter(&s->radius, delta);
-	else
-		s->pos+=delta;
+	//x1^2*a + x1*b + c = f1	solve these for -b/(2a) (argmin of parabola) by Cramer's rule
+	//x2^2*a + x2*b + c = f2
+	//x3^2*a + x3*b + c = f3
+#define		X1	p[0].x
+#define		X2	p[1].x
+#define		X3	p[2].x
+#define		C1	p[0].y
+#define		C2	p[1].y
+#define		C3	p[2].y
+	double sqX1, sqX2, sqX3, d, da, db, minX, minC;
+	sqX1=X1*X1, sqX2=X2*X2, sqX3=X3*X3;
+#if 1
+	d=sqX2*X3-sqX3*X2 - (sqX1*X3-sqX3*X1) + sqX1*X2-sqX2*X1;//not sure this is needed
+	if(!d)
+		goto upside_down;
+#endif
+	db=sqX2*C3-sqX3*C2 - (sqX1*C3-sqX3*C1) + sqX1*C2-sqX2*C1;
+	if(!db)
+		goto upside_down;
+	da=C2*X3-C3*X2 - (C1*X3-C3*X1) + C1*X2-C2*X1;
+	if((da>0)!=(d>0))
+		goto upside_down;
+	*ret_x=-db/(2*da);
+	return 1;
+upside_down:
+	minX=X1, minC=C1;
+	if(minC>C2)
+		minX=X2, minC=C2;
+	if(minC>C3)
+		minX=X3, minC=C3;
+	*ret_x=minX;
+	return 0;
+#undef		X1
+#undef		X2
+#undef		X3
+#undef		C1
+#undef		C2
+#undef		C3
 }
+void			set_var(OpticElem *oe, int kvar, double val)
+{
+	//kvar: {left.pos, left.radius, right.pos, right.radius}
+	Surface *s=oe->surfaces+(kvar>>1);
+	if(kvar&1)
+		s->radius=val?1/val:0;
+	else
+		s->pos=val;
+}
+double			change_var(OpticElem *oe, int kvar, double delta)
+{
+	//kvar: {left.pos, left.radius, right.pos, right.radius}
+	Surface *s=oe->surfaces+(kvar>>1);
+	if(kvar&1)
+	{
+		change_diopter(&s->radius, delta);
+		if(!s->radius)
+			return 0;
+		return 1/s->radius;
+	}
+	s->pos+=delta;
+	return s->pos;
+}
+void			optimize(int ke, int kvar, double dx, double f0)
+{
+	OpticElem *oe;
+	Point p[3];
+	double optx;
+
+	oe=(OpticElem*)array_at(&elements, ke);
+	p[0].x=change_var(oe, kvar, dx);
+	simulate(0);
+	p[0].y=calc_loss();
+
+	p[2].x=change_var(oe, kvar, -dx*2);
+	simulate(0);
+	p[2].y=calc_loss();
+
+	p[1].x=change_var(oe, kvar, dx);
+	p[1].y=f0;
+
+	argmin_quadratic(p, &optx);
+	set_var(oe, kvar, optx);
+}
+#if 0
 void			calc_grad(double *grad, double step, int *var_idx, int nvars, int exclude_elem)
 {
 	history_enabled=0;
@@ -2368,13 +2448,13 @@ void			calc_grad(double *grad, double step, int *var_idx, int nvars, int exclude
 			for(int kv=0;kv<nvars;++kv)
 			{
 				change_var(ge, var_idx[kv], step);
-				simulate();
+				simulate(0);
 				change_var(ge, var_idx[kv], -step);
 				grad[nvars*ke+kv]=calc_loss();
 			}
 		}
 	}
-	simulate();
+	simulate(0);
 	double loss=calc_loss();
 	for(int ke=exclude_elem;ke<(int)elements->count;++ke)
 	{
@@ -2399,6 +2479,7 @@ void			update_params(double *grad, int *var_idx, int nvars, int exclude_elem)
 		}
 	}
 }
+#endif
 
 
 double			VX=0, VY=0, DX=20, AR_Y=1, Xstep, Ystep;
@@ -2795,28 +2876,28 @@ void			render()
 					seconds=(tail-minutes)*60;
 				const char *a=0;
 				abs_tilt*=2;
-					 if(abs_tilt<0.000333334)	a=" Ganymede-";
-				else if(abs_tilt<0.0005)		a=" Ganymede+";
-				else if(abs_tilt<0.000611112)	a=" Neptune-";
-				else if(abs_tilt<0.000666667)	a=" Neptune+";
-				else if(abs_tilt<0.000916667)	a=" Uranus-";
-				else if(abs_tilt<0.000972222)	a=" Mars-";
-				else if(abs_tilt<0.001138888)	a=" Uranus+";
-				else if(abs_tilt<0.00125)		a=" Mercury-";
-				else if(abs_tilt<0.00269444)	a=" Venus-";
-				else if(abs_tilt<0.00361111)	a=" Mercury+";
-				else if(abs_tilt<0.00402776)	a=" Saturn-";
-				else if(abs_tilt<0.00558334)	a=" Saturn+";
-				else if(abs_tilt<0.00697222)	a=" Mars+";
-				else if(abs_tilt<0.00827778)	a=" Jupiter-";
-				else if(abs_tilt<0.01391667)	a=" Jupiter+";
-				else if(abs_tilt<0.01833334)	a=" Venus+";
-				else if(abs_tilt<0.488334)		a=" Moon-";
-				else if(abs_tilt<0.458612)		a=" Sun-";
-				else if(abs_tilt<0.542222)		a=" Sun+";
-				else if(abs_tilt<0.568334)		a=" Moon+";
-				else if(abs_tilt<1)				a=" Andromeda-";
-				else if(abs_tilt<3.01667)		a=" Andromeda+";
+					 if(abs_tilt<0.000333334)	a="\tGanymede-";
+				else if(abs_tilt<0.0005)		a="\tGanymede+";
+				else if(abs_tilt<0.000611112)	a="\tNeptune-";
+				else if(abs_tilt<0.000666667)	a="\tNeptune+";
+				else if(abs_tilt<0.000916667)	a="\tUranus-";
+				else if(abs_tilt<0.000972222)	a="\tMars-";
+				else if(abs_tilt<0.001138888)	a="\tUranus+";
+				else if(abs_tilt<0.00125)		a="\tMercury-";
+				else if(abs_tilt<0.00269444)	a="\tVenus-";
+				else if(abs_tilt<0.00361111)	a="\tMercury+";
+				else if(abs_tilt<0.00402776)	a="\tSaturn-";
+				else if(abs_tilt<0.00558334)	a="\tSaturn+";
+				else if(abs_tilt<0.00697222)	a="\tMars+";
+				else if(abs_tilt<0.00827778)	a="\tJupiter-";
+				else if(abs_tilt<0.01391667)	a="\tJupiter+";
+				else if(abs_tilt<0.01833334)	a="\tVenus+";
+				else if(abs_tilt<0.488334)		a="\tMoon-";
+				else if(abs_tilt<0.458612)		a="\tSun-";
+				else if(abs_tilt<0.542222)		a="\tSun+";
+				else if(abs_tilt<0.568334)		a="\tMoon+";
+				else if(abs_tilt<1)				a="\tAndromeda-";
+				else if(abs_tilt<3.01667)		a="\tAndromeda+";
 				else							a="";
 				GUITPrint(ghMemDC, 0, y, 0, "\tTilt = %gd %g\' %g\"%s", tilt, minutes, seconds, a);
 				y+=16;
@@ -2904,7 +2985,7 @@ void			set_attribute(int attrNo)
 		oe->n=val;
 		break;
 	}
-	simulate();
+	simulate(1);
 }
 long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, long lParam)
 {
@@ -3068,7 +3149,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				function1();
 			}
 			if(e)
-				simulate();
+				simulate(1);
 			InvalidateRect(ghWnd, 0, 0);
 			if(!kp)
 				timer=0, KillTimer(ghWnd, 0);
@@ -3127,7 +3208,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				nrays+=mw_forward-!mw_forward;
 				if(nrays<1)
 					nrays=1;
-				simulate();
+				simulate(1);
 			}
 			else if(kb['X'])
 			{
@@ -3168,7 +3249,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			{
 				OpticElem *oe=(OpticElem*)array_at(&elements, current_elem);
 				oe->active=!oe->active;
-				simulate();
+				simulate(1);
 			}
 			break;
 		case VK_F1:
@@ -3216,11 +3297,25 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				if(open_system(0))
 				{
 					tan_tilt=0;
-					simulate();
+					simulate(1);
 				}
 			}
-			else if(kb[VK_SHIFT])
+			else
 			{
+				double dx=DX/w;
+				double loss=calc_loss();
+				if(kb[VK_SHIFT])//optimize all elements
+				{
+					for(int ke=0;ke<(int)elements->count;++ke)//X
+						for(int kv=0;kv<4;++kv)
+							optimize(ke, kv, dx, loss);
+				}
+				else//optimize current element
+				{
+					for(int kv=0;kv<4;++kv)//X  joint optimization
+						optimize(current_elem, kv, dx, loss);
+				}
+				simulate(1);
 			}
 #if 0
 			else//optimize
@@ -3246,7 +3341,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 						velocity[k]*=0.5;
 				}
 				update_params(velocity, var_idx, nvars, exclude_first);
-				simulate();
+				simulate(1);
 			}
 #endif
 			break;
@@ -3300,7 +3395,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 					e=1;
 				}
 				if(e)
-					simulate();
+					simulate(1);
 			}
 			break;
 		case 'T':
@@ -3309,7 +3404,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			break;
 		//case 'M':
 		//	twosides=!twosides;
-		//	simulate();
+		//	simulate(1);
 		//	break;
 		case 'F'://flip optical element
 			{
@@ -3326,7 +3421,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 					oe->surfaces[0].radius=-oe->surfaces[1].radius;
 					oe->surfaces[1].radius=-temp;
 
-					simulate();
+					simulate(1);
 				}
 			}
 			break;
@@ -3359,7 +3454,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				else if(kb['5'])
 					oe->n=oe0->n, e=1;
 				if(e)
-					simulate();
+					simulate(1);
 				else
 				{
 					if(!kb[VK_CONTROL])
@@ -3443,7 +3538,7 @@ int __stdcall	WinMain(HINSTANCE hInstance, HINSTANCE hPrev, char *cmdargs, int n
 
 		//shift_lambdas(0);
 		ebackup=array_copy(&elements);
-		simulate();
+		simulate(1);
 
 	ShowWindow(ghWnd, nCmdShow);
 	
