@@ -26,8 +26,6 @@
 #include<io.h>//for console
 #include<fcntl.h>
 
-//	#define		ENABLE_OPTIMIZER
-
 #define			SIZEOF(ST_ARR)	(sizeof(ST_ARR)/sizeof(*(ST_ARR)))
 #define			G_BUF_SIZE	2048
 char			g_buf[G_BUF_SIZE]={0};
@@ -42,8 +40,8 @@ const unsigned
 HPEN			hPen=0, hPenLens=0, hPenMirror=0;
 HBRUSH			hBrush=0, hBrushHollow=0;
 int				w=0, h=0, X0, Y0;
-int				mx=0, my=0, kpressed=0;
-char			keyboard[256]={0};
+int				mx=0, my=0, kp=0;
+char			kb[256]={0};
 POINT			centerP, mouseP0;
 RECT			R;
 int				*rgb=0, rgbn=0;
@@ -534,7 +532,7 @@ typedef enum SurfaceTypeEnum
 	SURF_TRANSP,//default
 	SURF_MIRROR,
 } SurfaceType;
-typedef struct BoundaryStruct
+typedef struct SurfaceStruct
 {
 	double
 		pos,	//the x-distance of surface center from origin
@@ -543,40 +541,29 @@ typedef struct BoundaryStruct
 	//the surface is always divided into {inner circle, outer donut}
 	SurfaceType type[2];
 	double r_max[2];//only the outer donut can have zero radius difference
-	double n_next;//refractive index after the boundary
-} Boundary;
-typedef struct OpticCompStruct
+} Surface;
+typedef struct OpticElemStruct
 {
-	ArrayHandle name;//string
-	int nBounds;//1~5 boundaries,	nMedia = nBounds-1 = 0~4 cemented pieces of glass
-	//union
-	//{
-		int active;
-	//	char active_media[4];
-	//};
-	Boundary info[5];
-#if 0
 	int active;
 	ArrayHandle name;	//string
 	double n;			//refractive index
 	Surface surfaces[2];//{left, right}		right radius is negated when parsing input
-#endif
-} OpticComp;//no automatic destructor
+} OpticElem;//no automatic destructor
 //void	free_opticElem(void *data)
 //{
-//	OpticComp *e1=(OpticComp*)data;
+//	OpticElem *e1=(OpticElem*)data;
 //	array_free(&e1->name);
 //}
 typedef struct AreaIdxStruct
 {
 	short e_idx;
-	char bound_idx, is_outer_not_inner;
+	char is_right_not_left, is_outer_not_inner;
 } AreaIdx;
 
 
 //globals
 int				current_elem=0;
-ArrayHandle		elements=0, ebackup=0,//arrays of OpticComp
+ArrayHandle		elements=0, ebackup=0,//arrays of OpticElem
 				order=0,//array of AreaIdx
 				photons=0;//array of Photon
 AreaIdx			initial_target={0};
@@ -744,7 +731,7 @@ void			free_elements(ArrayHandle *arr)
 	{
 		for(int ke=0;ke<(int)arr[0]->count;++ke)
 		{
-			OpticComp *oe=(OpticComp*)array_at(arr, ke);
+			OpticElem *oe=(OpticElem*)array_at(arr, ke);
 			array_free(&oe->name);
 		}
 		array_free(arr);
@@ -835,16 +822,7 @@ int				skip_ws(ArrayHandle text, int *idx, int *lineno, int *linestart)
 				break;
 		}
 		else if(isspace(text->data[*idx]))
-		{
-			if(text->data[*idx]=='\n')
-			{
-				++*idx;
-				++*lineno;
-				*linestart=*idx;
-			}
-			else
-				++*idx;
-		}
+			++*idx;
 		else
 			break;
 	}
@@ -881,13 +859,10 @@ int				get_id(ArrayHandle text, int *idx)//returns true if valid identifier
 }
 const char
 	kw_elem[]="elem",
-	kw_comp[]="comp",
 	kw_n[]="n",
 	kw_pos[]="pos",
 	kw_th[]="th",
 	kw_ap[]="ap",
-	kw_bound[]="bound",
-	kw_medium[]="medium",
 	kw_inactive[]="inactive",
 	kw_left[]="left",
 	kw_right[]="right",
@@ -912,17 +887,15 @@ const char
 	kw_inch[]="inch",
 	kw_ft[]="ft";
 const char
-	*ksearch_start[]={kw_elem, kw_comp, kw_light, kw_rays, kw_path},
+	*ksearch_start[]={kw_elem, kw_light, kw_rays, kw_path},
 	*ksearch_attr[]={kw_n, kw_pos, kw_th, kw_ap, kw_inactive},
-	*ksearch_attr_comp[]={kw_pos, kw_ap, kw_inactive},
 	*ksearch_unit_dist[]={kw_mm, kw_cm, kw_m, kw_inch, kw_ft},
 	*ksearch_unit_lambda[]={kw_nm, kw_angestrom},
 	*ksearch_surface[]={kw_left, kw_right},
 	*ksearch_stype[]={kw_hole, kw_transp, kw_mirror},
-	*ksearch_area[]={kw_inner, kw_outer},
-	*ksearch_medium[]={kw_th, kw_n};
+	*ksearch_area[]={kw_inner, kw_outer};
 #define			EXPECT(CH)		if(text->data[*idx]!=(CH)){LOG_ERROR("%s(%d): Expected \'%c\'", filename, *lineno, CH); success=0; goto finish;} ++*idx;
-int				parse_number(const char *filename, ArrayHandle text, int *idx, int *lineno, int *linestart, int units_type, double *ret_val)//units_type: 0: no units, 1: cm, 2: nm
+int				parse_number(const char *filename, ArrayHandle text, int *idx, int *lineno, int *linestart, int units_type, double *ret_val)
 {
 	double val=0;
 	int success=0;
@@ -1006,387 +979,13 @@ int				parse_number(const char *filename, ArrayHandle text, int *idx, int *linen
 		*ret_val=sign*val;
 	return success;
 }
-//int			parse_boundary(const char *filename, ArrayHandle text, int *idx, int *lineno, int *linestart, OpticComp *e1)
-//{
-//}
-//int			parse_medium(const char *filename, ArrayHandle text, int *idx, int *lineno, int *linestart, OpticComp *e1)
-//{
-//}
-int				parse_comp(const char *filename, ArrayHandle text, int *idx, int *lineno, int *linestart, OpticComp *e1)
+int				parse_elem(const char *filename, ArrayHandle text, int *idx, int *lineno, int *linestart, OpticElem *e1)
 {
 	int fieldmask=0;//{right, left,  ap, th, pos, n}
 	int success=1;
 	double ap=0;
 	
 	e1->active=1;//assume all elements initially active unless specified as 'inactive'
-	for(;;)
-	{
-		if(skip_ws(text, idx, lineno, linestart))
-		{
-			LOG_ERROR("%s(%d): Expected \'n\', \'pos\', \'th\', or \'ap\'", filename, *lineno);
-			success=0;
-			break;
-		}
-		int match=match_kw(text, idx, ksearch_attr_comp, SIZEOF(ksearch_attr_comp));
-		if(match==-1)
-		{
-			LOG_ERROR("%s(%d): Expected \'pos\' or \'ap\'", filename, *lineno);
-			success=0;
-			break;
-		}
-		if(skip_ws(text, idx, lineno, linestart))
-		{
-			LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
-			success=0;
-			break;
-		}
-		EXPECT('=')
-		if(skip_ws(text, idx, lineno, linestart))
-		{
-			LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
-			success=0;
-			break;
-		}
-		switch(match)
-		{
-		case 0://pos
-			{
-				double offset=0;
-				for(int ke=0;ke<(int)elements->count-1;++ke)
-				{
-					OpticComp *e2=(OpticComp*)array_at(&elements, ke);
-					const char *name=e2->name->data;
-					match=match_kw(text, idx, &name, 1);
-					if(match!=-1)
-					{
-						offset=e2->info[e2->nBounds-1].pos;
-						if(skip_ws(text, idx, lineno, linestart))
-						{
-							LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
-							success=0;
-							goto finish;
-						}
-						EXPECT('+')//must add number to a previously declared element position
-						if(skip_ws(text, idx, lineno, linestart))
-						{
-							LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
-							success=0;
-							goto finish;
-						}
-						break;
-					}
-				}
-				if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->info[0].pos))
-				{
-					success=0;
-					goto finish;
-				}
-				e1->info[0].pos+=offset;
-				fieldmask|=2;
-			}
-			break;
-		case 1://ap: the aperture (diameter), if not specified then both left & right specifications must mention r_max[1]
-			if(!parse_number(filename, text, idx, lineno, linestart, 1, &ap))//left.pos is to be added
-			{
-				success=0;
-				goto finish;
-			}
-			fieldmask|=8;
-			break;
-		case 2://inactive
-			e1->active=0;
-			break;
-		}
-		if(text->data[*idx]==';')
-		{
-			++*idx;
-			break;
-		}
-		EXPECT(',')
-	}
-
-	e1->nBounds=0;
-	for(;;)//parse bounds & media
-	{
-		Boundary *bound=e1->info+e1->nBounds;
-		if(skip_ws(text, idx, lineno, linestart))
-		{
-			LOG_ERROR("%s(%d): Expected \'bound\'", filename, *lineno);
-			success=0;
-			break;
-		}
-		const char *kw=kw_bound;
-		int match=match_kw(text, idx, &kw, 1);
-		if(match==-1)
-		{
-			if(!e1->nBounds)
-				LOG_ERROR("%s(%d): Expected \'bound\'", filename, *lineno);
-			break;
-		}
-		if(skip_ws(text, idx, lineno, linestart))
-		{
-			LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
-			success=0;
-			break;
-		}
-		EXPECT('=')
-		if(skip_ws(text, idx, lineno, linestart))
-		{
-			LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
-			success=0;
-			break;
-		}
-
-		kw=kw_plane;
-		match=match_kw(text, idx, &kw, 1);
-		if(match==-1)//parse normal number
-		{
-			if(!parse_number(filename, text, idx, lineno, linestart, 1, &bound->radius))//negate only the right radius later
-			{
-				success=0;
-				goto finish;
-			}
-		}
-		else//set radius 0 for plane
-			bound->radius=0;
-		
-		if(skip_ws(text, idx, lineno, linestart))
-		{
-			LOG_ERROR("%s(%d): Expected \':\' or \';\'", filename, *lineno);
-			success=0;
-			break;
-		}
-		if(text->data[*idx]==':')
-		{
-			++*idx;//skip colon
-			if(skip_ws(text, idx, lineno, linestart))
-			{
-				LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno);
-				success=0;
-				break;
-			}
-			match=match_kw(text, idx, ksearch_stype, SIZEOF(ksearch_stype));
-			if(match==-1)
-			{
-				LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno);
-				success=0;
-				break;
-			}
-			switch(match)
-			{
-			case 0:bound->type[0]=SURF_HOLE;break;
-			case 1:bound->type[0]=SURF_TRANSP;break;
-			case 2:bound->type[0]=SURF_MIRROR;break;
-			}
-			if(skip_ws(text, idx, lineno, linestart))
-			{
-				LOG_ERROR("%s(%d): Expected \';\' at the end of \'bound %s\' declaration", filename, *lineno, e1->nBounds+1);
-				success=0;
-				break;
-			}
-			if((fieldmask&8)==8&&text->data[*idx]==';')
-			{
-				++*idx;
-				continue;
-			}
-			EXPECT(',')
-			if(skip_ws(text, idx, lineno, linestart))
-			{
-				LOG_ERROR("%s(%d): Expected a number", filename, *lineno);
-				success=0;
-				break;
-			}
-			if(!parse_number(filename, text, idx, lineno, linestart, 1, &bound->r_max[0]))
-			{
-				success=0;
-				goto finish;
-			}
-			if(skip_ws(text, idx, lineno, linestart))
-			{
-				LOG_ERROR("%s(%d): Expected \',\'");
-				success=0;
-				break;
-			}
-			if(text->data[*idx]==';')//one area
-			{
-				++*idx;
-				bound->r_max[1]=bound->r_max[0];
-				bound->type[1]=bound->type[0];
-				continue;
-			}
-			EXPECT(',')
-			if(skip_ws(text, idx, lineno, linestart))
-			{
-				LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno);
-				success=0;
-				break;
-			}
-			match=match_kw(text, idx, ksearch_stype, SIZEOF(ksearch_stype));
-			if(match==-1)
-			{
-				LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno);
-				success=0;
-				break;
-			}
-			switch(match)
-			{
-			case 0:bound->type[1]=SURF_HOLE;break;
-			case 1:bound->type[1]=SURF_TRANSP;break;
-			case 2:bound->type[1]=SURF_MIRROR;break;
-			}
-			if(skip_ws(text, idx, lineno, linestart))
-			{
-				LOG_ERROR("%s(%d): Expected a number", filename, *lineno);
-				success=0;
-				break;
-			}
-			if(!(fieldmask&8))//if aperture wasn't declared
-			{
-				EXPECT(',')
-				if(skip_ws(text, idx, lineno, linestart))
-				{
-					LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno);
-					success=0;
-					break;
-				}
-				if(!parse_number(filename, text, idx, lineno, linestart, 1, &bound->r_max[1]))
-				{
-					success=0;
-					goto finish;
-				}
-				if(skip_ws(text, idx, lineno, linestart))
-				{
-					LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno);
-					success=0;
-					break;
-				}
-			}
-		}
-		EXPECT(';')
-		
-		++e1->nBounds;
-
-		if(skip_ws(text, idx, lineno, linestart))//parse medium (optional)
-		{
-			LOG_ERROR("%s(%d): Expected \'bound\'", filename, *lineno);
-			success=0;
-			break;
-		}
-		kw=kw_medium;
-		match=match_kw(text, idx, &kw, 1);
-		if(match==-1)//the only correct way to end the 2nd loop
-			break;
-		if(e1->nBounds==4)
-		{
-			LOG_ERROR("%s(%d): 4 media with 5 boundaries max", filename, *lineno);
-			break;
-		}
-		for(int mask2=0;mask2!=3;)//{bit1: n, bit0: th}
-		{
-			if(skip_ws(text, idx, lineno, linestart))
-			{
-				LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
-				success=0;
-				goto finish;
-			}
-		
-			match=match_kw(text, idx, ksearch_medium, SIZEOF(ksearch_medium));
-			if(match==-1)
-			{
-				LOG_ERROR("%s(%d): Expected \'th\' or \'n\'", filename, *lineno);
-				success=0;
-				goto finish;
-			}
-			if(skip_ws(text, idx, lineno, linestart))
-			{
-				LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
-				success=0;
-				goto finish;
-			}
-			EXPECT('=')
-			if(skip_ws(text, idx, lineno, linestart))
-			{
-				LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
-				success=0;
-				goto finish;
-			}
-			switch(match)
-			{
-			case 0://th
-				if(mask2&1)
-				{
-					LOG_ERROR("%s(%d): \'th\' was already declared", filename, *lineno);
-					success=0;
-					goto finish;
-				}
-				mask2|=1;
-				if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->info[e1->nBounds].pos))
-				{
-					success=0;
-					goto finish;
-				}
-				e1->info[e1->nBounds].pos+=bound->pos;//thickness to absolute position
-				break;
-			case 1://n
-				if(mask2&2)
-				{
-					LOG_ERROR("%s(%d): \'n\' was already declared", filename, *lineno);
-					success=0;
-					goto finish;
-				}
-				mask2|=2;
-				if(!parse_number(filename, text, idx, lineno, linestart, 0, &bound->n_next))
-				{
-					success=0;
-					goto finish;
-				}
-				break;
-			}
-			if(skip_ws(text, idx, lineno, linestart))
-			{
-				LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
-				success=0;
-				goto finish;
-			}
-			if(text->data[*idx]==';')
-			{
-				++*idx;
-				if(mask2!=3)
-					LOG_ERROR("%s(%d): Missing medium attribute ", filename, *lineno);
-				break;
-			}
-			EXPECT(',');
-		}
-	}//end of 2nd loop
-	if(e1->nBounds>1)
-		negate(&e1->info[e1->nBounds-1].radius);//flip right radius
-	if(fieldmask&8)//if aperture was declared, it overrides boundary apertures
-	{
-		ap*=0.5;
-		for(int kb=0;kb<e1->nBounds;++kb)
-			e1->info[kb].r_max[1]=ap;
-	}
-	for(int kb=0;kb<e1->nBounds;++kb)//inner radius can't be zero
-		if(!e1->info[kb].r_max[0])//if inner radius is zero, then set it as outer radius
-			e1->info[kb].r_max[0]=e1->info[kb].r_max[1];
-	for(int kb=0;kb<e1->nBounds;++kb)//set transparent by default
-	{
-		for(int k2=0;k2<2;++k2)
-			if(e1->info[kb].type[k2]==SURF_UNINITIALIZED)
-				e1->info[kb].type[k2]=SURF_TRANSP;
-	}
-	e1->info[e1->nBounds-1].n_next=1;
-finish:
-	return success;
-}
-int				parse_elem(const char *filename, ArrayHandle text, int *idx, int *lineno, int *linestart, OpticComp *e1)
-{
-	int fieldmask=0;//{right, left,  ap, th, pos, n}
-	int success=1;
-	double ap=0;
-	
-	e1->active=1;//assume all elements initially active unless specified as 'inactive'
-#if 1
 	for(;;)
 	{
 		if(skip_ws(text, idx, lineno, linestart))
@@ -1418,7 +1017,7 @@ int				parse_elem(const char *filename, ArrayHandle text, int *idx, int *lineno,
 		switch(match)
 		{
 		case 0://n: the refractive index
-			if(!parse_number(filename, text, idx, lineno, linestart, 0, &e1->info[0].n_next))
+			if(!parse_number(filename, text, idx, lineno, linestart, 0, &e1->n))
 			{
 				success=0;
 				goto finish;
@@ -1430,12 +1029,12 @@ int				parse_elem(const char *filename, ArrayHandle text, int *idx, int *lineno,
 				double offset=0;
 				for(int ke=0;ke<(int)elements->count-1;++ke)
 				{
-					OpticComp *e2=(OpticComp*)array_at(&elements, ke);
+					OpticElem *e2=(OpticElem*)array_at(&elements, ke);
 					const char *name=e2->name->data;
 					match=match_kw(text, idx, &name, 1);
 					if(match!=-1)
 					{
-						offset=e2->info[e2->nBounds-1].pos;
+						offset=e2->surfaces[1].pos;
 						if(skip_ws(text, idx, lineno, linestart))
 						{
 							LOG_ERROR("%s(%d): Expected assignment", filename, *lineno);
@@ -1452,17 +1051,17 @@ int				parse_elem(const char *filename, ArrayHandle text, int *idx, int *lineno,
 						break;
 					}
 				}
-				if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->info[0].pos))
+				if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->surfaces[0].pos))
 				{
 					success=0;
 					goto finish;
 				}
-				e1->info[0].pos+=offset;
+				e1->surfaces[0].pos+=offset;
 				fieldmask|=2;
 			}
 			break;
 		case 2://th: the element thickness at center
-			if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->info[1].pos))//left.pos is to be added
+			if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->surfaces[1].pos))//left.pos is to be added
 			{
 				success=0;
 				goto finish;
@@ -1477,7 +1076,7 @@ int				parse_elem(const char *filename, ArrayHandle text, int *idx, int *lineno,
 			}
 			fieldmask|=8;
 			break;
-		case 4://inactive
+		case 4:
 			e1->active=0;
 			break;
 		}
@@ -1487,8 +1086,7 @@ int				parse_elem(const char *filename, ArrayHandle text, int *idx, int *lineno,
 			break;
 		}
 		EXPECT(',')
-	}//end of initial loop
-#endif
+	}
 	
 	while((fieldmask&0x30)!=0x30)
 	{
@@ -1539,14 +1137,14 @@ int				parse_elem(const char *filename, ArrayHandle text, int *idx, int *lineno,
 		int match2=match_kw(text, idx, &kw2, 1);
 		if(match2==-1)//parse normal number
 		{
-			if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->info[match].radius))//negate only the right radius later
+			if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->surfaces[match].radius))//negate only the right radius later
 			{
 				success=0;
 				goto finish;
 			}
 		}
 		else//set radius 0 for plane
-			e1->info[match].radius=0;
+			e1->surfaces[match].radius=0;
 		
 		if(skip_ws(text, idx, lineno, linestart))
 		{
@@ -1572,13 +1170,13 @@ int				parse_elem(const char *filename, ArrayHandle text, int *idx, int *lineno,
 			}
 			switch(match2)
 			{
-			case 0:e1->info[match].type[0]=SURF_HOLE;break;
-			case 1:e1->info[match].type[0]=SURF_TRANSP;break;
-			case 2:e1->info[match].type[0]=SURF_MIRROR;break;
+			case 0:e1->surfaces[match].type[0]=SURF_HOLE;break;
+			case 1:e1->surfaces[match].type[0]=SURF_TRANSP;break;
+			case 2:e1->surfaces[match].type[0]=SURF_MIRROR;break;
 			}
 			if(skip_ws(text, idx, lineno, linestart))
 			{
-				LOG_ERROR("%s(%d): Expected \';\' at the end of \'%s\' declaration", filename, *lineno, match?"right":"left");
+				LOG_ERROR("%s(%d): Expected \';\' at the end of %s declaration", filename, *lineno, match?"right":"left");
 				success=0;
 				break;
 			}
@@ -1594,7 +1192,7 @@ int				parse_elem(const char *filename, ArrayHandle text, int *idx, int *lineno,
 				success=0;
 				break;
 			}
-			if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->info[match].r_max[0]))
+			if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->surfaces[match].r_max[0]))
 			{
 				success=0;
 				goto finish;
@@ -1608,14 +1206,14 @@ int				parse_elem(const char *filename, ArrayHandle text, int *idx, int *lineno,
 			if(text->data[*idx]==';')//one area
 			{
 				++*idx;
-				e1->info[match].r_max[1]=e1->info[match].r_max[0];
-				e1->info[match].type[1]=e1->info[match].type[0];
+				e1->surfaces[match].r_max[1]=e1->surfaces[match].r_max[0];
+				e1->surfaces[match].type[1]=e1->surfaces[match].type[0];
 				continue;
 			}
 			EXPECT(',')
 			if(skip_ws(text, idx, lineno, linestart))
 			{
-				LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno);
+				LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno, match?"right":"left");
 				success=0;
 				break;
 			}
@@ -1628,9 +1226,9 @@ int				parse_elem(const char *filename, ArrayHandle text, int *idx, int *lineno,
 			}
 			switch(match2)
 			{
-			case 0:e1->info[match].type[1]=SURF_HOLE;break;
-			case 1:e1->info[match].type[1]=SURF_TRANSP;break;
-			case 2:e1->info[match].type[1]=SURF_MIRROR;break;
+			case 0:e1->surfaces[match].type[1]=SURF_HOLE;break;
+			case 1:e1->surfaces[match].type[1]=SURF_TRANSP;break;
+			case 2:e1->surfaces[match].type[1]=SURF_MIRROR;break;
 			}
 			if(skip_ws(text, idx, lineno, linestart))
 			{
@@ -1643,46 +1241,44 @@ int				parse_elem(const char *filename, ArrayHandle text, int *idx, int *lineno,
 				EXPECT(',')
 				if(skip_ws(text, idx, lineno, linestart))
 				{
-					LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno);
+					LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno, match?"right":"left");
 					success=0;
 					break;
 				}
-				if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->info[match].r_max[1]))
+				if(!parse_number(filename, text, idx, lineno, linestart, 1, &e1->surfaces[match].r_max[1]))
 				{
 					success=0;
 					goto finish;
 				}
 				if(skip_ws(text, idx, lineno, linestart))
 				{
-					LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno);
+					LOG_ERROR("%s(%d): Expected \'mirror\', \'transp\' or \'hole\'", filename, *lineno, match?"right":"left");
 					success=0;
 					break;
 				}
 			}
 		}
 		EXPECT(';')
-	}//end of 2nd loop
-	e1->nBounds=2;
-	e1->info[1].pos+=e1->info[0].pos;//add left position to thickness
-	//if(e1->info[1].radius)
-		e1->info[1].radius=-e1->info[1].radius;//flip right radius
+	}
+	e1->surfaces[1].pos+=e1->surfaces[0].pos;//add left position to thickness
+	//if(e1->surfaces[1].radius)
+		e1->surfaces[1].radius=-e1->surfaces[1].radius;//flip right radius
 	if(fieldmask&8)//if aperture was declared, it overrides left & right declarations
 	{
 		ap*=0.5;
-		e1->info[0].r_max[1]=ap;
-		e1->info[1].r_max[1]=ap;
+		e1->surfaces[0].r_max[1]=ap;
+		e1->surfaces[1].r_max[1]=ap;
 	}
-	if(!e1->info[0].r_max[0])//if inner radius is zero, then set it as outer radius
-		e1->info[0].r_max[0]=e1->info[0].r_max[1];
-	if(!e1->info[1].r_max[0])
-		e1->info[1].r_max[0]=e1->info[1].r_max[1];
-	for(int kb=0;kb<2;++kb)//set transparent by default
+	if(!e1->surfaces[0].r_max[0])//if inner radius is zero, then set it as outer radius
+		e1->surfaces[0].r_max[0]=e1->surfaces[0].r_max[1];
+	if(!e1->surfaces[1].r_max[0])
+		e1->surfaces[1].r_max[0]=e1->surfaces[1].r_max[1];
+	for(int k=0;k<2;++k)//set transparent by default
 	{
 		for(int k2=0;k2<2;++k2)
-			if(e1->info[kb].type[k2]==SURF_UNINITIALIZED)
-				e1->info[kb].type[k2]=SURF_TRANSP;
+			if(e1->surfaces[k].type[k2]==SURF_UNINITIALIZED)
+				e1->surfaces[k].type[k2]=SURF_TRANSP;
 	}
-	e1->info[e1->nBounds-1].n_next=1;
 finish:
 	return success;
 }
@@ -1691,7 +1287,7 @@ finish:
 void			init_system()
 {
 	array_clear(&elements);
-	ARRAY_ALLOC(OpticComp, elements, 0, 0, 0, 0);
+	ARRAY_ALLOC(OpticElem, elements, 0, 0, 0, 0);
 	
 	array_clear(&photons);
 	ARRAY_ALLOC(Photon, photons, 0, 0, 0, free_photon);
@@ -1761,9 +1357,8 @@ int				open_system(const char *filename)
 		switch(match)
 		{
 		case 0://elem
-		case 1://comp
 			{
-				OpticComp *e1=(OpticComp*)ARRAY_APPEND(elements, 0, 1, 1, 0);
+				OpticElem *e1=(OpticElem*)ARRAY_APPEND(elements, 0, 1, 1, 0);
 				int start=idx;
 				get_id(text, &idx);
 				if(start>=idx)
@@ -1775,7 +1370,7 @@ int				open_system(const char *filename)
 				STR_COPY(e1->name, text->data+start, idx-start);
 				for(int ke=0;ke<(int)elements->count-1;++ke)//check for name uniqueness
 				{
-					OpticComp *e2=(OpticComp*)array_at(&elements, ke);
+					OpticElem *e2=(OpticElem*)array_at(&elements, ke);
 					if(!strcmp(e2->name->data, e1->name->data))
 					{
 						LOG_ERROR("%s(%d): Element \'%s\' appeared twice at %d and %d", filename, lineno, e1->name->data, ke, (int)elements->count-1);
@@ -1794,13 +1389,10 @@ int				open_system(const char *filename)
 					success=0;
 					goto finish;
 				}
-				if(match)
-					parse_comp(filename, text, &idx, &lineno, &linestart, e1);
-				else
-					parse_elem(filename, text, &idx, &lineno, &linestart, e1);
+				parse_elem(filename, text, &idx, &lineno, &linestart, e1);
 			}
 			break;
-		case 2://light
+		case 1://light
 			{
 				EXPECT(':')
 				array_clear(&photons);
@@ -1830,7 +1422,7 @@ int				open_system(const char *filename)
 				}
 			}
 			break;
-		case 3://rays
+		case 2://rays
 			{
 				double f_nrays=0;
 				ArrayHandle name;
@@ -1842,8 +1434,6 @@ int				open_system(const char *filename)
 					goto finish;
 				}
 				success=parse_number(filename, text, &idx, &lineno, &linestart, 0, &f_nrays);
-				if(!success)
-					goto finish;
 				nrays=(int)f_nrays<<1;
 				if(skip_ws(text, &idx, &lineno, &linestart))
 				{
@@ -1869,7 +1459,7 @@ int				open_system(const char *filename)
 				STR_COPY(name, text->data+start, idx-start);
 				for(int ke=0;ke<(int)elements->count;++ke)
 				{
-					OpticComp *e1=(OpticComp*)array_at(&elements, ke);
+					OpticElem *e1=(OpticElem*)array_at(&elements, ke);
 					if(!strcmp(name->data, e1->name->data))
 					{
 						initial_target.e_idx=ke;
@@ -1877,7 +1467,6 @@ int				open_system(const char *filename)
 					}
 				}
 				array_free(&name);
-
 				if(skip_ws(text, &idx, &lineno, &linestart))
 				{
 					LOG_ERROR("%s(%d): Expected \'.\'", filename, lineno);
@@ -1887,21 +1476,21 @@ int				open_system(const char *filename)
 				EXPECT('.')
 				if(skip_ws(text, &idx, &lineno, &linestart))
 				{
-					LOG_ERROR("%s(%d): Expected \'left\', \'right\' or a boundary number", filename, lineno);
+					LOG_ERROR("%s(%d): Expected \'left\', or \'right\'", filename, lineno);
 					success=0;
 					goto finish;
 				}
 				match=match_kw(text, &idx, ksearch_surface, SIZEOF(ksearch_surface));
-				if(match!=-1)
-					initial_target.bound_idx=match;
-				else
+				if(match==-1)
 				{
-					initial_target.bound_idx=(text->data[idx]&0xDF)-'A';
-					++idx;
+					LOG_ERROR("%s(%d): Expected \'left\', or \'right\'", filename, lineno);
+					success=0;
+					break;
 				}
+				initial_target.is_right_not_left=match;
 				if(skip_ws(text, &idx, &lineno, &linestart))
 				{
-					LOG_ERROR("%s(%d): Expected \'.\' or \';\'", filename, lineno);
+					LOG_ERROR("%s(%d): Expected \'.\'", filename, lineno);
 					success=0;
 					goto finish;
 				}
@@ -1935,7 +1524,7 @@ int				open_system(const char *filename)
 				EXPECT(';')
 			}
 			break;
-		case 4://path
+		case 3://path
 			{
 				EXPECT(':')
 				for(;;)
@@ -1959,7 +1548,7 @@ int				open_system(const char *filename)
 					STR_COPY(name, text->data+start, idx-start);
 					for(int ke=0;ke<(int)elements->count;++ke)
 					{
-						OpticComp *e1=(OpticComp*)array_at(&elements, ke);
+						OpticElem *e1=(OpticElem*)array_at(&elements, ke);
 						if(!strcmp(name->data, e1->name->data))
 						{
 							aidx->e_idx=ke;
@@ -1977,29 +1566,29 @@ int				open_system(const char *filename)
 
 					if(skip_ws(text, &idx, &lineno, &linestart))
 					{
-						LOG_ERROR("%s(%d): Expected \'left\', \'right\' or a boundary number", filename, lineno);
+						LOG_ERROR("%s(%d): Expected \'left\', or \'right\'", filename, lineno);
 						success=0;
 						goto finish;
 					}
 					match=match_kw(text, &idx, ksearch_surface, SIZEOF(ksearch_surface));
-					if(match!=-1)
-						aidx->bound_idx=match;
-					else
+					if(match==-1)
 					{
-						aidx->bound_idx=(text->data[idx]&0xDF)-'A';
-						++idx;
+						LOG_ERROR("%s(%d): Expected \'left\', or \'right\'", filename, lineno);
+						success=0;
+						break;
 					}
+					aidx->is_right_not_left=match;
 
 					if(skip_ws(text, &idx, &lineno, &linestart))
 					{
-						LOG_ERROR("%s(%d): Expected \'.\' or \';\'", filename, lineno);
+						LOG_ERROR("%s(%d): Expected \'.\'", filename, lineno);
 						success=0;
 						goto finish;
 					}
 					if(text->data[idx]==','||text->data[idx]==';')//default is outer
 					{
 						int end=text->data[idx]==';';
-						++idx;//skip comma/semicolon
+						++idx;//skip comma
 						aidx->is_outer_not_inner=0;//default is inner area
 						if(end)
 							break;
@@ -2060,22 +1649,21 @@ const char		comment[]=
 	"/*\n"
 	"2022-08-08Mo\n"
 	"KEYWORDS\n"
-	"comp <name>:            Glass component declaration\n"
-	"elem <name>:            2-sided glass element declaration (deprecated)\n"
-	"inactive:               Makes component initially inactive\n"
-	"ap:                     Aperture (diameter) (optional)\n"
-	"n:                      Refractive index\n"
+	"elem <name>:            glass element declaration\n"
+	"inactive:               makes element initially inactive\n"
+	"ap:                     aperture (diameter) (optional)\n"
+	"n:                      refractive index\n"
 	"pos:                    x-distance from origin\n"
-	"th:                     Thickness\n"
-	"left, right:            Surface specifications\n"
-	"mirror/transp/hole:     Surface type (transp is default)\n"
+	"th:                     thickness\n"
+	"left, right:            surface specifications\n"
+	"mirror/transp/hole:     surface type (transp is default)\n"
 	"\n"
-	"light:  Wavelength list in nanometers (nm)\n"
+	"light:  wavelength list in nanometers (nm)\n"
 	"\n"
-	"rays:   Specify the incident ray count\n"
+	"rays:   specify the incident ray count\n"
 	"        and initial target area (not necessarily the first boundary)\n"
 	"\n"
-	"path:   Describe the correct light path through the optical device\n"
+	"path:   describe the correct light path through the optical device\n"
 	"\n"
 	"UNITS\n"
 	"dimensions:     mm, cm (default), m, inch, ft\n"
@@ -2090,24 +1678,22 @@ void			print2str(ArrayHandle *str, const char *format, ...)
 	va_end(args);
 	STR_APPEND(*str, g_buf, printed, 1);
 }
-#if 0
-void			print2str_surface(ArrayHandle *str, Boundary *s, int bound_idx)
+void			print2str_surface(ArrayHandle *str, Surface *s, int is_right_not_left)
 {
 	const char *name;
 	double radius;
 	const char *stypes[]={"hole", "transp", "mirror"};
 
-	if(bound_idx)
+	if(is_right_not_left)
 		name="right", radius=-s->radius;
 	else
 		name="left", radius=s->radius;
 	print2str(str, "\t%s\t=%gcm: %s, %gcm, %s, %gcm;\n", name, radius, stypes[s->type[0]-1], s->r_max[0], stypes[s->type[1]-1], s->r_max[1]);
 }
-#endif
 void			print2str_aidx(ArrayHandle *str, AreaIdx *aidx)
 {
-	OpticComp *oe=(OpticComp*)array_at(&elements, aidx->e_idx);
-	print2str(str, "%s.%c.%s", oe->name->data, 'a'+aidx->bound_idx, aidx->is_outer_not_inner?"outer":"inner");
+	OpticElem *oe=(OpticElem*)array_at(&elements, aidx->e_idx);
+	print2str(str, "%s.%s.%s", oe->name->data, aidx->is_right_not_left?"right":"left", aidx->is_outer_not_inner?"outer":"inner");
 }
 int				save_system(const char *filename)
 {
@@ -2164,49 +1750,13 @@ int				save_system(const char *filename)
 		ts->tm_min,
 		ts->tm_sec,
 		ts->tm_hour<12?"AM":"PM");
-	
-	const char *stypes[]={"hole", "transp", "mirror"};
+
 	for(int ke=0;ke<(int)elements->count;++ke)
 	{
-		OpticComp *oe=(OpticComp*)array_at(&elements, ke);
-		if(oe->nBounds==2)//'elem' is deprecated
-		{
-			print2str(&text, "elem\t%s, pos=%gcm, th=%gcm, n=%g;\n", (char*)oe->name->data, oe->info[0].pos, oe->info[1].pos-oe->info[0].pos, oe->info[0].n_next);
-			for(int kb=0;kb<2;++kb)
-			{
-				const char *name;
-				double radius;
-				Boundary const *b=oe->info+kb;
-				if(kb)
-					name="right", radius=-b->radius;
-				else
-					name="left", radius=b->radius;
-				print2str(&text, "\t%s\t=%gcm: %s, %gcm, %s, %gcm;\n", name, radius, stypes[b->type[0]-1], b->r_max[0], stypes[b->type[1]-1], b->r_max[1]);
-			}
-			//print2str_surface(&text, oe->info, 0);
-			//print2str_surface(&text, oe->info+1, 1);
-		}
-		else//'comp'
-		{
-			print2str(&text, "comp\t%s, pos=%gcm;\n", (char*)oe->name->data, oe->info[0].pos);
-			for(int kb=0;kb<oe->nBounds;++kb)
-			{
-				Boundary const *b=oe->info+kb;
-
-				print2str(&text, "\tbound\t=%gcm: %s, %gcm, %s, %gcm;\n",
-					kb<oe->nBounds-1?b->radius:-b->radius,
-					stypes[b->type[0]-1],
-					b->r_max[0],
-					stypes[b->type[1]-1],
-					b->r_max[1]);
-
-				if(kb+1<oe->nBounds)
-				{
-					Boundary const *b2=oe->info+kb+1;
-					print2str(&text, "\tmedium\tth=%gcm, n=%g;\n", b2->pos-b->pos, b->n_next);
-				}
-			}
-		}
+		OpticElem *oe=(OpticElem*)array_at(&elements, ke);
+		print2str(&text, "elem\t%s, n=%g, pos=%gcm, th=%gcm;\n", (char*)oe->name->data, oe->n, oe->surfaces[0].pos, oe->surfaces[1].pos-oe->surfaces[0].pos);
+		print2str_surface(&text, oe->surfaces, 0);
+		print2str_surface(&text, oe->surfaces+1, 1);
 		print2str(&text, "\n");
 	}
 
@@ -2468,31 +2018,21 @@ void	meanvar(double *arr, int count, int stride, double *ret_mean, double *ret_v
 }
 
 
-typedef struct SurfaceParamsStruct
+void			get_params(OpticElem const *e1, AreaIdx *aidx, double lambda, double *ap_min, double *ap_max, double *nL, double *nR, double *pos, double *radius, SurfaceType *type)
 {
-	SurfaceType type;
-	double
-		pos,
-		radius,
-		ap_min, ap_max,
-		nL, nR;
-} SurfaceParams;
-void			get_params(OpticComp const *e1, AreaIdx const *aidx, double lambda, SurfaceParams *params)
-{
-	Boundary const *surface=e1->info+aidx->bound_idx;
-	params->type=surface->type[aidx->is_outer_not_inner];
-	params->pos=surface->pos;
-	params->radius=surface->radius;
-	params->ap_min=aidx->is_outer_not_inner?surface->r_max[0]:0;
-	params->ap_max=surface->r_max[aidx->is_outer_not_inner];
-
-	params->nL=aidx->bound_idx?lambda2n(e1->info[aidx->bound_idx-1].n_next, lambda):1;
-	params->nR=lambda2n(surface->n_next, lambda);
-	//double n=lambda2n(surface->n_next, lambda);
-	//if(!aidx->bound_idx)
-	//	params->nL=1, params->nR=n;
-	//else if(aidx->bound_idx==e1->nBounds-1)
-	//	params->nL=n, params->nR=1;
+	Surface const *surface=e1->surfaces+aidx->is_right_not_left;
+	//if(ap_min)
+		*ap_min=aidx->is_outer_not_inner?surface->r_max[0]:0;
+	//if(ap_max)
+		*ap_max=surface->r_max[aidx->is_outer_not_inner];
+	double n=lambda2n(e1->n, lambda);
+	if(aidx->is_right_not_left)
+		*nL=n, *nR=1;
+	else
+		*nL=1, *nR=n;
+	*pos=surface->pos;
+	*radius=surface->radius;
+	*type=surface->type[aidx->is_outer_not_inner];
 }
 void			simulate(int user)//number of rays must be even, always double-sided
 {
@@ -2522,10 +2062,10 @@ void			simulate(int user)//number of rays must be even, always double-sided
 #if 0
 	for(int ke=0;ke<elements->count;++ke)
 	{
-		OpticComp *e1=(OpticComp*)array_at(&elements, ke);
+		OpticElem *e1=(OpticElem*)array_at(&elements, ke);
 		for(int ke2=0;ke2<elements->count;++ke2)
 		{
-			OpticComp *e2=(OpticComp*)array_at(&elements, ke2);
+			OpticElem *e2=(OpticElem*)array_at(&elements, ke2);
 			double xmin=e1->left.pos, xmax=e1->right.pos;
 			if(xmin>e2->left.pos)
 				xmin=e2->left.pos;
@@ -2543,52 +2083,52 @@ void			simulate(int user)//number of rays must be even, always double-sided
 	//find first element
 #if 0
 	int e1_idx=0;
-	OpticComp *e1=(OpticComp*)array_at(&elements, e1_idx);
+	OpticElem *e1=(OpticElem*)array_at(&elements, e1_idx);
 	for(int ke=1;ke<elements->count;++ke)
 	{
-		OpticComp *e2=(OpticComp*)array_at(&elements, ke);
+		OpticElem *e2=(OpticElem*)array_at(&elements, ke);
 		if(e1->left.pos>e2->left.pos)//naive left surface center comparison
 		{
 			e1_idx=ke;
-			e1=(OpticComp*)array_at(&elements, e1_idx);
+			e1=(OpticElem*)array_at(&elements, e1_idx);
 		}
 	}
 #endif
 	
 	//find rays range (from the target)
 	double ymin, ymax;
-	OpticComp *e1=(OpticComp*)array_at(&elements, initial_target.e_idx);
-	Boundary *bound=e1->info+initial_target.bound_idx;
+	OpticElem *e1=(OpticElem*)array_at(&elements, initial_target.e_idx);
+	Surface *surface=e1->surfaces+initial_target.is_right_not_left;
 	if(initial_target.is_outer_not_inner)//is outer area
 	{
-		ymin=bound->r_max[0];
-		ymax=bound->r_max[1];
+		ymin=surface->r_max[0];
+		ymax=surface->r_max[1];
 	}
 	else//is inner area
 	{
 		ymin=0;
-		ymax=bound->r_max[0];
+		ymax=surface->r_max[0];
 	}
 
 	//find x range of optical device
 	double xmin, xmax;
-	e1=(OpticComp*)array_at(&elements, 0);
-	xmin=e1->info[0].pos;
-	xmax=e1->info[e1->nBounds-1].pos;
+	e1=(OpticElem*)array_at(&elements, 0);
+	xmin=e1->surfaces[0].pos;
+	xmax=e1->surfaces[1].pos;
 	for(int ke=1;ke<(int)elements->count;++ke)
 	{
-		e1=(OpticComp*)array_at(&elements, ke);
-		if(xmin>e1->info[0].pos)
-			xmin=e1->info[0].pos;
-		if(xmax<e1->info[e1->nBounds-1].pos)
-			xmax=e1->info[e1->nBounds-1].pos;
+		e1=(OpticElem*)array_at(&elements, ke);
+		if(xmin>e1->surfaces[0].pos)
+			xmin=e1->surfaces[0].pos;
+		if(xmax<e1->surfaces[1].pos)
+			xmax=e1->surfaces[1].pos;
 	}
 	double xlength=xmax-xmin, xstart=xmin-10*xlength;
 
 	//initialize incident rays
 	AreaIdx *aidx=(AreaIdx*)array_at(&order, 0);
-	e1=(OpticComp*)array_at(&elements, aidx->e_idx);
-	bound=e1->info+aidx->bound_idx;
+	e1=(OpticElem*)array_at(&elements, aidx->e_idx);
+	surface=e1->surfaces+aidx->is_right_not_left;
 	for(int kp=0;kp<(int)photons->count;++kp)
 	{
 		Photon *ph=(Photon*)array_at(&photons, kp);
@@ -2597,42 +2137,40 @@ void			simulate(int user)//number of rays must be even, always double-sided
 		for(int kp2=0;kp2<(int)ph->paths->count;++kp2)//for each ray	path->count must be even
 		{
 			Path *path=(Path*)array_at(&ph->paths, kp2);
-			ARRAY_ALLOC(Point, path->points, 0, 0, 2, 0);
+			ARRAY_ALLOC(Point, path->points, 0, 0, 0, 0);
 			Point *points=ARRAY_APPEND(path->points, 0, 2, 1, 0);
 			points->x=xstart;
 			points->y=ymin+((kp2>>1)+1)*(ymax-ymin)/((ph->paths->count>>1)+1);
 			//points->y=ymin+((kp2>>1)+1)*(ymax-ymin)/(ph->paths->count>>1);//X  top ray doesn't emerge
 			if(kp2&1)//rays are in pairs mirrored by ground line, odd rays are below the even rays
 				points->y=-points->y;
-			path->emerged=intersect_ray_surface(xstart, points->y, xstart+xlength, points->y, ymin, ymax, bound->pos, bound->radius, points+1);//must hit
+			path->emerged=intersect_ray_surface(xstart, points->y, xstart+xlength, points->y, ymin, ymax, surface->pos, surface->radius, points+1);//must hit
 			points[0].y-=tan_tilt*(points[1].x-points[0].x);
 		}
 	}
 
 
 	//main simulation loop
-	for(int ko=0;ko<(int)order->count;++ko)//for each areaIdx in 'order' array
+	for(int ko=0;ko<(int)order->count;++ko)//for each areidx in list order
 	{
 		aidx=(AreaIdx*)array_at(&order, ko);
-		//if(aidx->e_idx==1&&aidx->bound_idx==1)//
+		//if(aidx->e_idx==1&&aidx->is_right_not_left==1)//
 		//	aidx=aidx;
-		e1=(OpticComp*)array_at(&elements, aidx->e_idx);//fetch next element
+		e1=(OpticElem*)array_at(&elements, aidx->e_idx);//fetch next element
 		for(int kp=0;kp<(int)photons->count;++kp)
 		{
 			Photon *ph=(Photon*)array_at(&photons, kp);
 			for(int kp2=0;kp2<(int)ph->paths->count;++kp2)//for each ray
 			{
-				Path *path;
-				Point *in_ray;
-				Point em_ray[2];
-				SurfaceParams params;
-
-				path=(Path*)array_at(&ph->paths, kp2);
+				Path *path=(Path*)array_at(&ph->paths, kp2);
 				if(!path->emerged)
 					continue;
-				in_ray=(Point*)array_at(&path->points, path->points->count-2);
-				get_params(e1, aidx, ph->lambda, &params);
-				int hit=hit_ray_surface(in_ray[0].x, in_ray[0].y, in_ray[1].x, in_ray[1].y, params.ap_min, params.ap_max, params.nL, params.nR, params.pos, params.radius, params.type, e1->active, em_ray);
+				Point *in_ray=(Point*)array_at(&path->points, path->points->count-2);
+				Point em_ray[2];
+				double ap_min, ap_max, nL, nR, pos, radius;
+				SurfaceType type;
+				get_params(e1, aidx, ph->lambda, &ap_min, &ap_max, &nL, &nR, &pos, &radius, &type);
+				int hit=hit_ray_surface(in_ray[0].x, in_ray[0].y, in_ray[1].x, in_ray[1].y, ap_min, ap_max, nL, nR, pos, radius, type, e1->active, em_ray);
 				if(hit==2)//extend same ray later
 					continue;
 				if(hit)
@@ -2782,18 +2320,18 @@ int				shift_lambdas(double delta)
 	}
 	return 1;
 }
-void			change_aperture(OpticComp *oe, double factor)
+void			change_aperture(OpticElem *oe, double factor)
 {
-	oe->info[0].r_max[0]*=factor;
-	oe->info[0].r_max[1]*=factor;
-	oe->info[1].r_max[0]*=factor;
-	oe->info[1].r_max[1]*=factor;
+	oe->surfaces[0].r_max[0]*=factor;
+	oe->surfaces[0].r_max[1]*=factor;
+	oe->surfaces[1].r_max[0]*=factor;
+	oe->surfaces[1].r_max[1]*=factor;
 }
 void			change_aperture_all(double factor)
 {
 	for(int ke=0;ke<(int)elements->count;++ke)
 	{
-		OpticComp *oe=(OpticComp*)array_at(&elements, ke);
+		OpticElem *oe=(OpticElem*)array_at(&elements, ke);
 		change_aperture(oe, factor);
 	}
 }
@@ -2806,41 +2344,12 @@ void			change_diopter(double *r, double delta)
 }
 void			change_n(double *n, double delta)
 {
-	double n2=*n+delta;
-	if(n2>=1.2||n2<=2)
-		*n=n2;
-}
-void			change_pos(OpticComp *oc, double delta)
-{
-	for(int kb=0;kb<oc->nBounds;++kb)
-		oc->info[kb].pos+=delta;
-}
-void			change_aperture_bound(OpticComp *oe, int kb, double factor)
-{
-	oe->info[kb].r_max[0]*=factor;
-	oe->info[kb].r_max[1]*=factor;
-}
-void			change_aperture_comp(OpticComp *oc, double factor)
-{
-	for(int kb=0;kb<oc->nBounds;++kb)
-	{
-		oc->info[kb].r_max[0]*=factor;
-		oc->info[kb].r_max[1]*=factor;
-	}
-}
-void			change_thickness(OpticComp *oc, int kb, double delta)
-{
-	for(;kb<oc->nBounds;++kb)
-	{
-		Boundary *b=oc->info+kb;
-		b->pos+=delta;
-		if(kb>0&&b->pos<oc->info[kb-1].pos)//avoid -ve thickness
-			b->pos=oc->info[kb-1].pos;
-	}
+	if(*n+delta<1.2||*n+delta>2)
+		return;
+	*n+=delta;
 }
 
 //optimizer
-#ifdef ENABLE_OPTIMIZER
 int				argmin_quadratic(Point *p, double *ret_x)
 {
 	//x1^2*a + x1*b + c = f1	solve these for -b/(2a) (argmin of parabola) by Cramer's rule
@@ -2882,19 +2391,19 @@ upside_down:
 #undef		C2
 #undef		C3
 }
-void			set_var(OpticComp *oe, int kvar, double val)
+void			set_var(OpticElem *oe, int kvar, double val)
 {
 	//kvar: {left.pos, left.radius, right.pos, right.radius}
-	Boundary *s=oe->info+(kvar>>1);
+	Surface *s=oe->surfaces+(kvar>>1);
 	if(kvar&1)
 		s->radius=val?1/val:0;
 	else
 		s->pos=val;
 }
-double			change_var(OpticComp *oe, int kvar, double delta)
+double			change_var(OpticElem *oe, int kvar, double delta)
 {
 	//kvar: {left.pos, left.radius, right.pos, right.radius}
-	Boundary *s=oe->info+(kvar>>1);
+	Surface *s=oe->surfaces+(kvar>>1);
 	if(kvar&1)
 	{
 		change_diopter(&s->radius, delta);
@@ -2907,11 +2416,11 @@ double			change_var(OpticComp *oe, int kvar, double delta)
 }
 void			optimize(int ke, int kvar, double dx, double f0)
 {
-	OpticComp *oe;
+	OpticElem *oe;
 	Point p[3];
 	double optx;
 
-	oe=(OpticComp*)array_at(&elements, ke);
+	oe=(OpticElem*)array_at(&elements, ke);
 	p[0].x=change_var(oe, kvar, dx);
 	simulate(0);
 	p[0].y=calc_loss();
@@ -2926,7 +2435,6 @@ void			optimize(int ke, int kvar, double dx, double f0)
 	argmin_quadratic(p, &optx);
 	set_var(oe, kvar, optx);
 }
-#endif
 #if 0
 void			calc_grad(double *grad, double step, int *var_idx, int nvars, int exclude_elem)
 {
@@ -2934,7 +2442,7 @@ void			calc_grad(double *grad, double step, int *var_idx, int nvars, int exclude
 	memset(grad, 0, elements->count*nvars*sizeof(double));
 	for(int ke=exclude_elem;ke<(int)elements->count;++ke)
 	{
-		OpticComp *ge=(OpticComp*)array_at(&elements, ke);
+		OpticElem *ge=(OpticElem*)array_at(&elements, ke);
 		if(ge->active)
 		{
 			for(int kv=0;kv<nvars;++kv)
@@ -2950,7 +2458,7 @@ void			calc_grad(double *grad, double step, int *var_idx, int nvars, int exclude
 	double loss=calc_loss();
 	for(int ke=exclude_elem;ke<(int)elements->count;++ke)
 	{
-		OpticComp *oe=(OpticComp*)array_at(&elements, ke);
+		OpticElem *oe=(OpticElem*)array_at(&elements, ke);
 		if(oe->active)
 		{
 			for(int kv=0;kv<nvars;++kv)
@@ -2963,7 +2471,7 @@ void			update_params(double *grad, int *var_idx, int nvars, int exclude_elem)
 {
 	for(int ke=exclude_elem;ke<(int)elements->count;++ke)
 	{
-		OpticComp *ge=(OpticComp*)array_at(&elements, ke);
+		OpticElem *ge=(OpticElem*)array_at(&elements, ke);
 		if(ge->active)
 		{
 			for(int kv=0;kv<nvars;++kv)
@@ -3115,36 +2623,50 @@ void			render()
 
 		hPenLens=(HPEN)SelectObject(ghMemDC, hPenLens);
 		int segments=25;
-		double topx[2]={0};
-		for(int ke=0;ke<(int)elements->count;++ke)			//draw optical components
+		double topx1, topx2;
+		for(int ke=0;ke<(int)elements->count;++ke)			//draw optical elements
 		{
-			OpticComp *oe=(OpticComp*)array_at(&elements, ke);
+			OpticElem *oe=(OpticElem*)array_at(&elements, ke);
 
-			for(int kb=0;kb<oe->nBounds;++kb)
+			//draw inner area
+			if(oe->surfaces[0].type[0]!=SURF_HOLE&&(oe->active||oe->surfaces[0].type[0]==SURF_MIRROR))//left side
 			{
-				Boundary *b=oe->info+kb;
-				topx[0]=topx[1];
-				for(int ka=0;ka<2;++ka)
-				{
-					if(b->type[ka]!=SURF_HOLE&&(oe->active||b->type[ka]==SURF_MIRROR))
-					{
-						double r1, r2;
-						if(ka)
-							r1=b->r_max[0], r2=b->r_max[1];
-						else
-							r1=0, r2=b->r_max[0];
-						if(b->type[ka]==SURF_MIRROR)
-							hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
-						topx[1]=draw_arc(b->pos, b->radius, r1, r2, scale, segments);
-						if(b->type[ka]==SURF_MIRROR)
-							hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
-					}
-				}
-				if(oe->active&&kb)
-				{
-					draw_line(topx[0], oe->info[kb-1].r_max[1], topx[1], oe->info[kb].r_max[1], scale);
-					draw_line(topx[0], -oe->info[kb-1].r_max[1], topx[1], -oe->info[kb].r_max[1], scale);
-				}
+				if(oe->surfaces[0].type[0]==SURF_MIRROR)
+					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+				draw_arc(oe->surfaces[0].pos, oe->surfaces[0].radius, 0, oe->surfaces[0].r_max[0], scale, segments);
+				if(oe->surfaces[0].type[0]==SURF_MIRROR)
+					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+			}
+			if(oe->surfaces[1].type[0]!=SURF_HOLE&&(oe->active||oe->surfaces[1].type[0]==SURF_MIRROR))//right side
+			{
+				if(oe->surfaces[1].type[0]==SURF_MIRROR)
+					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+				draw_arc(oe->surfaces[1].pos, oe->surfaces[1].radius, 0, oe->surfaces[1].r_max[0], scale, segments);
+				if(oe->surfaces[1].type[0]==SURF_MIRROR)
+					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+			}
+
+			//draw outer area
+			if(oe->surfaces[0].type[1]!=SURF_HOLE&&(oe->active||oe->surfaces[0].type[1]==SURF_MIRROR))//left side
+			{
+				if(oe->surfaces[0].type[1]==SURF_MIRROR)
+					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+				topx1=draw_arc(oe->surfaces[0].pos, oe->surfaces[0].radius, oe->surfaces[0].r_max[0], oe->surfaces[0].r_max[1], scale, segments);
+				if(oe->surfaces[0].type[1]==SURF_MIRROR)
+					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+			}
+			if(oe->surfaces[1].type[1]!=SURF_HOLE&&(oe->active||oe->surfaces[1].type[1]==SURF_MIRROR))//right side
+			{
+				if(oe->surfaces[1].type[1]==SURF_MIRROR)
+					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+				topx2=draw_arc(oe->surfaces[1].pos, oe->surfaces[1].radius, oe->surfaces[1].r_max[0], oe->surfaces[1].r_max[1], scale, segments);
+				if(oe->surfaces[1].type[1]==SURF_MIRROR)
+					hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+			}
+			if(oe->active)
+			{
+				draw_line(topx1, oe->surfaces[0].r_max[1], topx2, oe->surfaces[1].r_max[1], scale);
+				draw_line(topx1, -oe->surfaces[0].r_max[1], topx2, -oe->surfaces[1].r_max[1], scale);
 			}
 		}
 		hPenLens=(HPEN)SelectObject(ghMemDC, hPenLens);
@@ -3269,103 +2791,23 @@ void			render()
 			GUITPrint(ghMemDC, 0, y, 0, "O\t\toptimize"), y+=48;
 #endif
 
-			int max_bounds=0;
+			GUITPrint(ghMemDC, 0, y, 0, "\t1 dist\t2 Rl\t3 Th\t4 Rr\t5 n\t6 ap"), y+=32;
 			for(int ke=0;ke<(int)elements->count;++ke)
 			{
-				OpticComp *oe=(OpticComp*)array_at(&elements, ke);
-				if(max_bounds<oe->nBounds)
-					max_bounds=oe->nBounds;
-			}
-
-			int nCols=max_bounds*2-1;
-			int printed=sprintf_s(g_buf, G_BUF_SIZE, "\t`");
-			for(int k=0;k<nCols;++k)
-				printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\t%d", k+1);
-			GUITPrint(ghMemDC, 0, y, 0, g_buf), y+=16;
-
-			printed=sprintf_s(g_buf, G_BUF_SIZE, "<>\tPos");
-			for(int k=0;;++k)
-			{
-				printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\tR");
-				++k;
-				if(k>=nCols)
-					break;
-				printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\tth");
-			}
-			GUITPrint(ghMemDC, 0, y, 0, g_buf), y+=16;
-
-			printed=sprintf_s(g_buf, G_BUF_SIZE, "^v\tAp");
-			for(int k=0;;++k)
-			{
-				printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\tap");
-				++k;
-				if(k>=nCols)
-					break;
-				printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\tn");
-			}
-			GUITPrint(ghMemDC, 0, y, 0, g_buf), y+=32;
-#if 0
-			int printed=sprintf_s(g_buf, G_BUF_SIZE, "\t`>pos\t^ap");
-			for(int k=0;;++k)
-			{
-				printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\t%d>R\t^ap", k+1);
-				++k;
-				if(k>=max_bounds)
-					break;
-				printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\t%d>th\t^n", k+1);
-			}
-			GUITPrint(ghMemDC, 0, y, 0, g_buf), y+=32;
-#endif
-			//GUITPrint(ghMemDC, 0, y, 0, "\t1 pos\t2 Rl\t3 Th\t4 Rr\t5 n\t6 ap"), y+=32;
-			
-			double max_ap;
-			for(int ke=0;ke<(int)elements->count;++ke)
-			{
-				OpticComp *oe=(OpticComp*)array_at(&elements, ke);
-
-				printed=sprintf_s(g_buf, G_BUF_SIZE, "%s %c\t%g", current_elem==ke?"->":" ", oe->active?'V':'X', oe->info[0].pos);
-				for(int k=0;k<oe->nBounds;++k)
-				{
-					printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\t%g", oe->info[k].radius);
-					if(k+1>=oe->nBounds)
-						break;
-					printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\t%g", oe->info[k+1].pos-oe->info[k].pos);
-				}
-				printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\t%s%s", (char*)oe->name->data, current_elem==ke?"\t<-":"");
-				GUITPrint(ghMemDC, 0, y, 0, g_buf), y+=16;
-				
-				max_ap=0;
-				for(int k=0;k<oe->nBounds;++k)
-				{
-					if(max_ap<oe->info[k].r_max[1])
-						max_ap=oe->info[k].r_max[1];
-				}
-				printed=sprintf_s(g_buf, G_BUF_SIZE, "%s %c\t%g", current_elem==ke?"->":" ", oe->active?'V':'X', max_ap);
-				for(int k=0;k<oe->nBounds;++k)
-				{
-					printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\t%g", oe->info[k].r_max[1]);
-					if(k+1>=oe->nBounds)
-						break;
-					printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\t%g", oe->info[k].n_next);
-				}
-				printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "%s", current_elem==ke?"\t\t<-":"");
-				GUITPrint(ghMemDC, 0, y, 0, g_buf), y+=32;
-
-#if 0
-				double th=oe->info[1].pos-oe->info[0].pos;
+				OpticElem *oe=(OpticElem*)array_at(&elements, ke);
+				double th=oe->surfaces[1].pos-oe->surfaces[0].pos;
 				GUITPrint(ghMemDC, 0, y, 0, "  %s %c\t%g\t%g\t%g\t%g\t%g\t%g  %s%s",
 					current_elem==ke?"->":" ",
 					oe->active?'V':'X',
-					oe->info[0].pos,
-					oe->info[0].radius,
+					oe->surfaces[0].pos,
+					oe->surfaces[0].radius,
 					th,
-					-oe->info[1].radius,
+					-oe->surfaces[1].radius,
 					oe->n,
-					maximum(oe->info[0].r_max[1], oe->info[1].r_max[1])*2,//aperture = diameter
+					maximum(oe->surfaces[0].r_max[1], oe->surfaces[1].r_max[1])*2,//aperture = diameter
 					(char*)oe->name->data,
 					current_elem==ke?"\t<-":"");
 				y+=16;
-#endif
 			}
 			y+=16;
 			GUITPrint(ghMemDC, 0, y, 0, "\tSensor: %d/%d rays  Std.Dev %lfmm  blurSize=%lfmm%s",
@@ -3378,9 +2820,9 @@ void			render()
 			y+=16;
 			if(initial_target.e_idx<(int)elements->count)
 			{
-				OpticComp *oe=(OpticComp*)array_at(&elements, initial_target.e_idx);
+				OpticElem *oe=(OpticElem*)array_at(&elements, initial_target.e_idx);
 				double ymin, ymax;
-				Boundary *surface=oe->info+initial_target.bound_idx;
+				Surface *surface=oe->surfaces+initial_target.is_right_not_left;
 				if(initial_target.is_outer_not_inner)//is outer area
 				{
 					ymin=surface->r_max[0];
@@ -3467,8 +2909,8 @@ void			render()
 			{
 				double focus=sqrt(point->x*point->x+point->y*point->y);
 				AreaIdx *aidx=(AreaIdx*)array_at(&order, 0);
-				OpticComp *oe=(OpticComp*)array_at(&elements, aidx->e_idx);
-				double ap=oe->info[aidx->bound_idx].r_max[1];
+				OpticElem *oe=(OpticElem*)array_at(&elements, aidx->e_idx);
+				double ap=oe->surfaces[aidx->is_right_not_left].r_max[1];
 				y=h-16*6;
 				GUITPrint(ghMemDC, 0, y, 0, "D %gcm, F %gcm, f/%g\t Std.Dev %lfmm", ap, focus, focus/ap, r_blur), y+=16;
 			}
@@ -3507,81 +2949,10 @@ void			wnd_resize()
 		//memset(history+hist_idx, 0, (w-hist_idx)*sizeof(double));
 	}
 }
-void			set_attribute(int attrNo)//attrNo: attrNo>>1 is kx, LSB is ky: {`/0: pos/Ap, 1: R/ap, 2: th/n, 3: R/ap, ...}
+void			set_attribute(int attrNo)
 {
-	double val;
-	OpticComp *oe=(OpticComp*)array_at(&elements, current_elem);
+	OpticElem *oe=(OpticElem*)array_at(&elements, current_elem);
 	console_start();
-
-	int kx=attrNo>>1, ky=attrNo&1;
-	printf("Set %s ", (char*)oe->name->data);
-	if(!kx)
-	{
-		if(ky)
-			printf("global aperture");
-		else
-			printf("pos");
-	}
-	else if(kx&1)
-	{
-		if(ky)
-			printf("aperture of boundary #%d", (kx>>1)+1);
-		else
-			printf("radius of boundary #%d", (kx>>1)+1);
-	}
-	else//kx is even & can't be zero
-	{
-		if(ky)
-			printf("refractive index (n) of medium #%d", kx>>1);
-		else
-			printf("thickness of medium #%d", kx>>1);
-	}
-	printf(": ");
-
-	val=0;
-	scanf_s("%lf", &val);
-	
-	if(!kx)
-	{
-		if(ky)//set global Ap
-		{
-			for(int kb=0;kb<oe->nBounds;++kb)
-			{
-				oe->info[kb].r_max[1]=val;
-				if(oe->info[kb].r_max[0]>val)
-					oe->info[kb].r_max[0]=val;
-			}
-		}
-		else//set element position
-		{
-			double delta=val-oe->info[0].pos;
-			for(int kb=0;kb<oe->nBounds;++kb)
-				oe->info[kb].pos+=delta;
-		}
-	}
-	else if(kx&1)
-	{
-		if(ky)//set aperture
-		{
-			oe->info[kx>>1].r_max[1]=val;//FIXME: what if I need to set r_max[0]?
-			if(oe->info[kx>>1].r_max[0]>val)
-				oe->info[kx>>1].r_max[0]=val;
-		}
-		else//set curvature radius
-			oe->info[kx>>1].radius=val;
-	}
-	else//kx is even & can't be zero
-	{
-		if(ky)//set refractive index
-			oe->info[(kx>>1)-1].n_next=val;
-		else//set thickness
-		{
-			double delta=val-(oe->info[kx>>1].pos-oe->info[(kx>>1)-1].pos);//new thickness - prev thickness
-			for(int k=kx>>1;k<oe->nBounds;++k)
-				oe->info[k].pos+=delta;
-		}
-	}
-#if 0
 	const char *a=0;
 	switch(attrNo)
 	{
@@ -3598,23 +2969,22 @@ void			set_attribute(int attrNo)//attrNo: attrNo>>1 is kx, LSB is ky: {`/0: pos/
 	switch(attrNo)
 	{
 	case 1://set position
-		oe->info[1].pos=val+oe->info[1].pos-oe->info[0].pos;
-		oe->info[0].pos=val;
+		oe->surfaces[1].pos=val+oe->surfaces[1].pos-oe->surfaces[0].pos;
+		oe->surfaces[0].pos=val;
 		break;
 	case 2://set left radius
-		oe->info[0].radius=val;
+		oe->surfaces[0].radius=val;
 		break;
 	case 3://set thickness
-		oe->info[1].pos=oe->info[0].pos+val;
+		oe->surfaces[1].pos=oe->surfaces[0].pos+val;
 		break;
 	case 4://set right radius
-		oe->info[1].radius=-val;
+		oe->surfaces[1].radius=-val;
 		break;
 	case 5:
 		oe->n=val;
 		break;
 	}
-#endif
 	simulate(1);
 }
 long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, long lParam)
@@ -3642,16 +3012,16 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 		case WA_ACTIVE:
 		case WA_CLICKACTIVE:
 			for(int k=0;k<256;++k)
-				keyboard[k]=(GetKeyState(k)&0x8000)!=0;
-			kpressed=keyboard[VK_UP]+keyboard[VK_DOWN]+keyboard[VK_LEFT]+keyboard[VK_RIGHT]
-				+keyboard[VK_ADD]+keyboard[VK_SUBTRACT]//numpad
-				+keyboard[VK_OEM_PLUS]+keyboard[VK_OEM_MINUS]
-				+keyboard[VK_RETURN]+keyboard[VK_BACK];
-			if(kpressed&&!timer)
+				kb[k]=(GetKeyState(k)&0x8000)!=0;
+			kp=kb[VK_UP]+kb[VK_DOWN]+kb[VK_LEFT]+kb[VK_RIGHT]
+				+kb[VK_ADD]+kb[VK_SUBTRACT]//numpad
+				+kb[VK_OEM_PLUS]+kb[VK_OEM_MINUS]
+				+kb[VK_RETURN]+kb[VK_BACK];
+			if(kp&&!timer)
 				timer=1, SetTimer(ghWnd, 0, 10, 0);
 			break;
 		case WA_INACTIVE:
-			keyboard[VK_LBUTTON]=0;
+			kb[VK_LBUTTON]=0;
 			if(drag)
 			{
 				ReleaseCapture();
@@ -3659,7 +3029,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				ShowCursor(1);
 				drag=0;
 			}
-			kpressed=0;
+			kp=0;
 			timer=0, KillTimer(ghWnd, 0);
 			break;
 		}
@@ -3670,108 +3040,118 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 	case WM_TIMER:
 		{
 			int e=0;
-			double dx=DX/w, delta;//horizontal pixel size in real units: the more you zoom in, the finer is the change
-			OpticComp *oe=(OpticComp*)array_at(&elements, current_elem);
-			if(keyboard[VK_OEM_3])//<>pos/^vAp
+			double dx=DX/w;//horizontal pixel size in real units: the more you zoom in, the finer is the change
+			OpticElem *oe=(OpticElem*)array_at(&elements, current_elem);
+			if(kb['1']||kb[VK_NUMPAD1])//position
 			{
-				double delta=keyboard[VK_SHIFT]?10*dx:dx;
-				if(keyboard[VK_LEFT])	change_pos(oe, -delta), e=1;
-				if(keyboard[VK_RIGHT])	change_pos(oe, -delta), e=1;
-				if(keyboard[VK_UP])		change_aperture_comp(oe, 1+0.1*dx), e=1;
-				if(keyboard[VK_DOWN])	change_aperture_comp(oe, 1/(1+0.1*dx)), e=1;
+				int allow_mod=oe->active
+					||oe->surfaces[0].type[0]==SURF_MIRROR
+					||oe->surfaces[0].type[1]==SURF_MIRROR
+					||oe->surfaces[1].type[0]==SURF_MIRROR
+					||oe->surfaces[1].type[1]==SURF_MIRROR;
+				double delta=kb[VK_SHIFT]?10*dx:dx;
+				if(allow_mod&&kb[VK_LEFT	])	oe->surfaces[0].pos-=delta, oe->surfaces[1].pos-=delta, e=1;
+				if(allow_mod&&kb[VK_RIGHT	])	oe->surfaces[0].pos+=delta, oe->surfaces[1].pos+=delta, e=1;
 			}
-			delta=keyboard[VK_SHIFT]?0.01*dx:0.001*dx;
-			for(int kb=0;kb<oe->nBounds;++kb)
+			if(kb['2']||kb[VK_NUMPAD2])//left radius
 			{
-				int idx=kb<<1;
-				if(keyboard['1'+idx]||keyboard[VK_NUMPAD1+idx])//R/ap
-				{
-					int allow_mod=oe->active||oe->info[kb].type[0]==SURF_MIRROR||oe->info[kb].type[1]==SURF_MIRROR;
-					if(!allow_mod)
-						continue;
-					if(keyboard[VK_LEFT	])	change_diopter(&oe->info[kb].radius, -delta), e=1;//can be modified when inactive because of mirrors
-					if(keyboard[VK_RIGHT])	change_diopter(&oe->info[kb].radius, delta), e=1;
-					if(keyboard[VK_UP	])	change_aperture_bound(oe, kb, 1/(1+0.1*dx)), e=1;
-					if(keyboard[VK_DOWN	])	change_aperture_bound(oe, kb, 1+0.1*dx), e=1;
-				}
+				int allow_mod=oe->active||oe->surfaces[0].type[0]==SURF_MIRROR||oe->surfaces[0].type[1]==SURF_MIRROR;
+				double delta=kb[VK_SHIFT]?0.01*dx:0.001*dx;
+				if(allow_mod&&kb[VK_LEFT	])	change_diopter(&oe->surfaces[0].radius, -delta), e=1;//can be modified when inactive because of mirrors
+				if(allow_mod&&kb[VK_RIGHT	])	change_diopter(&oe->surfaces[0].radius, delta), e=1;
 			}
-			delta=keyboard[VK_SHIFT]?10*dx:dx;
-			for(int kb=1;kb<oe->nBounds;++kb)
+			if(kb['3']||kb[VK_NUMPAD3])//thickness
 			{
-				int idx=(kb-1)<<1;
-				if(keyboard['2'+idx]||keyboard[VK_NUMPAD2+idx])//th/n
-				{
-					if(keyboard[VK_LEFT	]&&oe->active)	change_thickness(oe, kb, -delta), e=1;
-					if(keyboard[VK_RIGHT]&&oe->active)	change_thickness(oe, kb, delta), e=1;
-					if(keyboard[VK_UP	]&&oe->active)	change_n(&oe->info[kb-1].n_next, 0.01*dx), e=1;//last n_next is always 1
-					if(keyboard[VK_DOWN	]&&oe->active)	change_n(&oe->info[kb-1].n_next, -0.01*dx), e=1;
-				}
+				double delta=kb[VK_SHIFT]?10*dx:dx;
+				if(kb[VK_LEFT	]&&oe->active)	oe->surfaces[1].pos-=delta, e=1;
+				if(kb[VK_RIGHT	]&&oe->active)	oe->surfaces[1].pos+=delta, e=1;
+				if(oe->surfaces[1].pos<oe->surfaces[0].pos)
+					oe->surfaces[1].pos=oe->surfaces[0].pos, e=1;
+			}
+			if(kb['4']||kb[VK_NUMPAD4])//right radius (flipped)
+			{
+				int allow_mod=oe->active||oe->surfaces[1].type[0]==SURF_MIRROR||oe->surfaces[1].type[1]==SURF_MIRROR;
+				double delta=kb[VK_SHIFT]?0.01*dx:0.001*dx;
+				if(allow_mod&&kb[VK_LEFT	])	change_diopter(&oe->surfaces[1].radius, -delta), e=1;//can be modified when inactive because of mirrors
+				if(allow_mod&&kb[VK_RIGHT	])	change_diopter(&oe->surfaces[1].radius, delta), e=1;
+			}
+			if(kb['5']||kb[VK_NUMPAD5])//refractive index
+			{
+				if(kb[VK_LEFT	]&&oe->active)	change_n(&oe->n, 0.01*dx), e=1;
+				if(kb[VK_RIGHT	]&&oe->active)	change_n(&oe->n, -0.01*dx), e=1;
+			}
+			if(kb['6']||kb[VK_NUMPAD6])//aperture
+			{
+				if(kb[VK_LEFT	]&&oe->active)	change_aperture(oe, 1/(1+0.1*dx)), e=1;
+				if(kb[VK_RIGHT	]&&oe->active)	change_aperture(oe, 1+0.1*dx), e=1;
 			}
 			if(!e)
 			{
 				if(_2d_drag_graph_not_window)
 				{
-					if(keyboard[VK_LEFT	])	VX+=10*dx;
-					if(keyboard[VK_RIGHT])	VX-=10*dx;
-					if(keyboard[VK_UP	])	VY-=10*dx/AR_Y;
-					if(keyboard[VK_DOWN	])	VY+=10*dx/AR_Y;
+					if(kb[VK_LEFT	])	VX+=10*DX/w;
+					if(kb[VK_RIGHT	])	VX-=10*DX/w;
+					if(kb[VK_UP		])	VY-=10*DX/(w*AR_Y);
+					if(kb[VK_DOWN	])	VY+=10*DX/(w*AR_Y);
 				}
 				else
 				{
-					if(keyboard[VK_LEFT	])	VX-=10*dx;
-					if(keyboard[VK_RIGHT])	VX+=10*dx;
-					if(keyboard[VK_UP	])	VY+=10*dx/AR_Y;
-					if(keyboard[VK_DOWN	])	VY-=10*dx/AR_Y;
+					if(kb[VK_LEFT	])	VX-=10*DX/w;
+					if(kb[VK_RIGHT	])	VX+=10*DX/w;
+					if(kb[VK_UP		])	VY+=10*DX/(w*AR_Y);
+					if(kb[VK_DOWN	])	VY-=10*DX/(w*AR_Y);
 				}
 			}
-			if(keyboard[VK_ADD		]||keyboard[VK_RETURN	]||keyboard[VK_OEM_PLUS	])
+			if(kb[VK_ADD		]||kb[VK_RETURN	]||kb[VK_OEM_PLUS	])
 			{
-				if(keyboard[VK_CONTROL])
+				if(kb[VK_CONTROL])
 					e|=shift_lambdas(1);
-				else if(keyboard[VK_SHIFT])
+				//{
+				//	if(lambda<750)
+				//		lambda+=1, n_base=wavelength2refractive_index(lambda), e=1;
+				//}
+				else if(kb[VK_SHIFT])
 				{
 					if(tan_tilt<0.7071)
 						tan_tilt+=0.00002*DX, e=1;
 				}
-				else if(keyboard['A'])
+				else if(kb['A'])
 				{
 					change_aperture_all(1+0.1*dx);
 					e=1;
 				}
-				else
-				{
-						 if(keyboard['X'])	DX/=1.05, AR_Y/=1.05;
-					else if(keyboard['Y'])	AR_Y*=1.05;
-					else					DX/=1.05;
-					function1();
-				}
+				else if(kb['X'])	DX/=1.05, AR_Y/=1.05;
+				else if(kb['Y'])	AR_Y*=1.05;
+				else				DX/=1.05;
+				function1();
 			}
-			if(keyboard[VK_SUBTRACT	]||keyboard[VK_BACK	]||keyboard[VK_OEM_MINUS	])
+			if(kb[VK_SUBTRACT	]||kb[VK_BACK	]||kb[VK_OEM_MINUS	])
 			{
-				if(keyboard[VK_CONTROL])
+				if(kb[VK_CONTROL])
 					e|=shift_lambdas(-1);
-				else if(keyboard[VK_SHIFT])
+				//{
+				//	if(lambda>380)
+				//		lambda-=1, n_base=wavelength2refractive_index(lambda), e=1;
+				//}
+				else if(kb[VK_SHIFT])
 				{
 					if(tan_tilt>-0.7071)
 						tan_tilt-=0.00002*DX, e=1;
 				}
-				else if(keyboard['A'])
+				else if(kb['A'])
 				{
 					change_aperture_all(1/(1+0.1*dx));
 					e=1;
 				}
-				else
-				{
-						 if(keyboard['X'])	DX*=1.05, AR_Y*=1.05;
-					else if(keyboard['Y'])	AR_Y/=1.05;
-					else					DX*=1.05;
-					function1();
-				}
+				else if(kb['X'])	DX*=1.05, AR_Y*=1.05;
+				else if(kb['Y'])	AR_Y/=1.05;
+				else				DX*=1.05;
+				function1();
 			}
 			if(e)
 				simulate(1);
 			InvalidateRect(ghWnd, 0, 0);
-			if(!kpressed)
+			if(!kp)
 				timer=0, KillTimer(ghWnd, 0);
 		}
 		break;
@@ -3795,7 +3175,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 		}
 		return 0;
 	case WM_LBUTTONDOWN:
-		keyboard[VK_LBUTTON]=1;
+		kb[VK_LBUTTON]=1;
 		if(!drag)
 		{
 			ShowCursor(0);
@@ -3807,7 +3187,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 		}
 		return 0;
 	case WM_LBUTTONUP:
-		keyboard[VK_LBUTTON]=0;
+		kb[VK_LBUTTON]=0;
 		if(drag)
 		{
 			ReleaseCapture();
@@ -3823,19 +3203,19 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 		{
 			double dx=(mx-w/2)*DX/w, dy=(h/2-my)*DX/(w*AR_Y);
 			int mw_forward=((short*)&wParam)[1]>0;
-			if(keyboard[VK_CONTROL])
+			if(kb[VK_CONTROL])
 			{
 				nrays+=mw_forward-!mw_forward;
 				if(nrays<1)
 					nrays=1;
 				simulate(1);
 			}
-			else if(keyboard['X'])
+			else if(kb['X'])
 			{
 					 if(mw_forward)	DX/=1.1, AR_Y/=1.1, VX=VX+dx-dx/1.1;
 				else				DX*=1.1, AR_Y*=1.1, VX=VX+dx-dx*1.1;
 			}
-			else if(keyboard['Y'])
+			else if(kb['Y'])
 			{
 					 if(mw_forward)	AR_Y*=1.1, VY=VY+dy-dy/1.1;
 				else				AR_Y/=1.1, VY=VY+dy-dy*1.1;
@@ -3857,75 +3237,62 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 		case VK_ADD:case VK_SUBTRACT://numpad
 		case VK_OEM_PLUS:case VK_OEM_MINUS:
 		case VK_RETURN:case VK_BACK:
-			if(!keyboard[wParam])
-				++kpressed;
+			if(!kb[wParam])
+				++kp;
 			if(!timer)
 				SetTimer(ghWnd, 0, 10, 0), timer=1;
 			break;
 		case VK_TAB:
-			current_elem=mod(current_elem+!keyboard[VK_SHIFT]-keyboard[VK_SHIFT], (int)elements->count);
+			current_elem=mod(current_elem+!kb[VK_SHIFT]-kb[VK_SHIFT], (int)elements->count);
 			break;
 		case VK_SPACE:
 			{
-				OpticComp *oe=(OpticComp*)array_at(&elements, current_elem);
+				OpticElem *oe=(OpticElem*)array_at(&elements, current_elem);
 				oe->active=!oe->active;
 				simulate(1);
 			}
 			break;
 		case VK_F1:
 			messagebox("Controls",
-				"Up/down/left/right/drag:\t\tNavigate\n"
-				"+/-/Enter/Backspace/Mousewheel:\tZoom\n"
-				"X/Y +/-/Enter/Backspace:\t\tChange aspect ratio\n"
-				"T:\tGo to focal point\n"
-				"R:\tReset view\n"
-				"E:\tReset scale\n"
-				"C:\tToggle clear screen\n"
+				"Up/down/left/right/drag: Navigate\n"
+				"+/-/Enter/Backspace/Mousewheel: Zoom\n"
+				"X/Y +/-/Enter/Backspace: Change aspect ratio\n"
+				"T: Go to focal point\n"
+				"R: Reset view\n"
+				"E: Reset scale\n"
+				"C: Toggle clear screen\n"
 				"\n"
-				"Ctrl O:\t\tOpen a preset\n"
-				"Tab / Shift Tab:\tSelect glass element\n"
-				"Space:\t\tToggle glass element\n"
-				"F:\t\tFlip glass element\n"
+				"Ctrl O: Open a preset\n"
+				"Tab / Shift Tab: Select glass element\n"
+				"Space: Toggle glass element\n"
+				"F: Flip glass element\n"
 				"\n"
-				"`/1/...9 S:\tSet top row parameter\n"
-				"`/1/...9 Z:\tSet bottom row parameter\n"
-				"` (grave accent) left/right:\tMove glass component\n"
-				"` (grave accent) up/down:\tChange component aperture (Ap)\n"
-				"1/3/5/7/9 left/right:\t\tChange corresponding boundary radius (R)\n"
-				"1/3/5/7/9 up/down:\t\tChange corresponding boundary aperture (ap)\n"
-				"2/4/6/8 left/right:\t\tChange corresponding medium thickness (th)\n"
-				"2/4/6/8 up/down:\t\tChange corresponding medium refractive index (n)\n"
-				"Speed of change depends on zoom level\n"
-#if 0
 				"1 left/right: Move glass element\n"
 				"2 left/right: Change left diopter\n"
 				"3 left/right: Change thickness\n"
 				"4 left/right: Change right diopter\n"
-				"5 left/right: Change refractive index (n)\n"
+				"5 left/right: Change refractive index\n"
 				"6 left/right: Change element aperture\n"
 				"Speed of change depends on zoom level\n"
 				"1~6 S: Set value of corresponding property\n"
-#endif
 				"\n"
-				"Shift R:\tReset all glass elements\n"
-			//	"1~6 R: Reset corresponding property of current glass element\n"
-				"Alt R:\tReset ray tilt\n"
+				"Shift R: Reset all glass elements\n"
+				"1~6 R: Reset corresponding property of current glass element\n"
+				"Alt R: Reset ray tilt\n"
 				"\n"
-				"A +/-/Enter/Backspace:\tChange all apertures\n"
-				"Ctrl +/-/Enter/Backspace:\tShift wavelengths\n"
-				"Shift +/-/Enter/Backspace:\tChange ray tilt\n"
-				"Ctrl Mousewheel:\t\tChange ray count\n"
+				"A +/-/Enter/Backspace: Change all apertures\n"
+				"Ctrl +/-/Enter/Backspace: Shift wavelengths\n"
+				"Shift +/-/Enter/Backspace: Change ray tilt\n"
+				"Ctrl Mousewheel: Change ray count\n"
 				"\n"
-				"H:\tClear history buffer\n"
-#ifdef ENABLE_OPTIMIZER
+				"H: Clear history buffer\n"
 				"O: Optimize current glass element\n"
 				"Shift O: Optimize all glass elements\n"
-#endif
 				"\n"
 				"Built on: %s %s", __DATE__, __TIME__);
 			break;
 		case 'O':
-			if(keyboard[VK_CONTROL])//open another system
+			if(kb[VK_CONTROL])//open another system
 			{
 				if(open_system(0))
 				{
@@ -3933,12 +3300,11 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 					simulate(1);
 				}
 			}
-#ifdef ENABLE_OPTIMIZER
 			else
 			{
 				double dx=DX/w;
 				double loss=calc_loss();
-				if(keyboard[VK_SHIFT])//optimize all elements
+				if(kb[VK_SHIFT])//optimize all elements
 				{
 					for(int ke=0;ke<(int)elements->count;++ke)//X
 						for(int kv=0;kv<4;++kv)
@@ -3951,7 +3317,6 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				}
 				simulate(1);
 			}
-#endif
 #if 0
 			else//optimize
 			{
@@ -3965,7 +3330,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 					velocity=(double*)malloc(bytesize);
 					memset(velocity, 0, bytesize);
 				}
-				int exclude_first=keyboard[VK_SHIFT]!=0;
+				int exclude_first=kb[VK_SHIFT]!=0;
 				calc_grad(grad, 0.001, var_idx, nvars, exclude_first);
 				double gain=0.0000001*DX;
 				for(int k=0;k<16;++k)
@@ -3981,15 +3346,15 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 #endif
 			break;
 		case 'S':
-			if(keyboard['1'])
+			if(kb['1'])
 				set_attribute(1);
-			else if(keyboard['2'])
+			else if(kb['2'])
 				set_attribute(2);
-			else if(keyboard['3'])
+			else if(kb['3'])
 				set_attribute(3);
-			else if(keyboard['4'])
+			else if(kb['4'])
 				set_attribute(4);
-			else if(keyboard['5'])
+			else if(kb['5'])
 				set_attribute(5);
 			else//save preset
 			{
@@ -4005,27 +3370,27 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			break;
 		case 'P':
 			{
-				OpticComp *oe=(OpticComp*)array_at(&elements, current_elem), *oe2;
+				OpticElem *oe=(OpticElem*)array_at(&elements, current_elem), *oe2;
 				int e=0;
-				if(keyboard['2'])
+				if(kb['2'])
 				{
-					if(oe->info[0].radius)
-						oe->info[0].radius=0;
+					if(oe->surfaces[0].radius)
+						oe->surfaces[0].radius=0;
 					else
 					{
-						oe2=(OpticComp*)array_at(&ebackup, current_elem);
-						oe->info[0].radius=oe2->info[0].radius;
+						oe2=(OpticElem*)array_at(&ebackup, current_elem);
+						oe->surfaces[0].radius=oe2->surfaces[0].radius;
 					}
 					e=1;
 				}
-				if(keyboard['4'])
+				if(kb['4'])
 				{
-					if(oe->info[1].radius)
-						oe->info[1].radius=0;
+					if(oe->surfaces[1].radius)
+						oe->surfaces[1].radius=0;
 					else
 					{
-						oe2=(OpticComp*)array_at(&ebackup, current_elem);
-						oe->info[1].radius=oe2->info[1].radius;
+						oe2=(OpticElem*)array_at(&ebackup, current_elem);
+						oe->surfaces[1].radius=oe2->surfaces[1].radius;
 					}
 					e=1;
 				}
@@ -4043,18 +3408,18 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 		//	break;
 		case 'F'://flip optical element
 			{
-				OpticComp *oe=(OpticComp*)array_at(&elements, current_elem);
+				OpticElem *oe=(OpticElem*)array_at(&elements, current_elem);
 				if(oe->active)
 				{
-					//Boundary temp;//BREAKS PATH
-					//memswap(oe->info, oe->info+1, sizeof(Boundary), &temp);
-					//memswap(&oe->info[0].pos, &oe->info[1].pos, sizeof(double), &temp);
-					//negate(&oe->info[0].radius);
-					//negate(&oe->info[1].radius);
+					//Surface temp;//BREAKS PATH
+					//memswap(oe->surfaces, oe->surfaces+1, sizeof(Surface), &temp);
+					//memswap(&oe->surfaces[0].pos, &oe->surfaces[1].pos, sizeof(double), &temp);
+					//negate(&oe->surfaces[0].radius);
+					//negate(&oe->surfaces[1].radius);
 
-					double temp=oe->info[0].radius;
-					oe->info[0].radius=-oe->info[1].radius;
-					oe->info[1].radius=-temp;
+					double temp=oe->surfaces[0].radius;
+					oe->surfaces[0].radius=-oe->surfaces[1].radius;
+					oe->surfaces[1].radius=-temp;
 
 					simulate(1);
 				}
@@ -4063,45 +3428,43 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 		case 'R':
 			{
 				int e=0;
-				OpticComp *oe=(OpticComp*)array_at(&elements, current_elem);
-				OpticComp *oe0=(OpticComp*)array_at(&ebackup, current_elem);
-				if(keyboard[VK_MENU])
+				OpticElem *oe=(OpticElem*)array_at(&elements, current_elem);
+				OpticElem *oe0=(OpticElem*)array_at(&ebackup, current_elem);
+				if(kb[VK_MENU])
 				{
 					tan_tilt=0;
 					e=1;
 				}
-				else if(keyboard[VK_SHIFT])
+				else if(kb[VK_SHIFT])
 				{
-					memcpy(elements->data, ebackup->data, elements->count*sizeof(OpticComp));
+					memcpy(elements->data, ebackup->data, elements->count*sizeof(OpticElem));
 					tan_tilt=0;
 					//ap=ap0;
 					//lambda=lambda0;
 					e=1;
 				}
-#if 0
-				else if(keyboard['1'])
-					oe->info[0].pos=oe0->info[0].pos, e=1;
-				else if(keyboard['2'])
-					oe->info[0].radius=oe0->info[0].radius, e=1;
-				else if(keyboard['3'])
-					oe->info[1].pos=oe->info[0].pos+(oe0->info[1].pos-oe0->info[0].pos), e=1;
-				else if(keyboard['4'])
-					oe->info[1].radius=oe0->info[1].radius, e=1;
-				else if(keyboard['5'])
+				else if(kb['1'])
+					oe->surfaces[0].pos=oe0->surfaces[0].pos, e=1;
+				else if(kb['2'])
+					oe->surfaces[0].radius=oe0->surfaces[0].radius, e=1;
+				else if(kb['3'])
+					oe->surfaces[1].pos=oe->surfaces[0].pos+(oe0->surfaces[1].pos-oe0->surfaces[0].pos), e=1;
+				else if(kb['4'])
+					oe->surfaces[1].radius=oe0->surfaces[1].radius, e=1;
+				else if(kb['5'])
 					oe->n=oe0->n, e=1;
-#endif
 				if(e)
 					simulate(1);
 				else
 				{
-					if(!keyboard[VK_CONTROL])
+					if(!kb[VK_CONTROL])
 						DX=20, AR_Y=1, function1();
 					VX=VY=0;
 				}
 			}
 			break;
 		case 'E':
-			if(keyboard[VK_CONTROL])
+			if(kb[VK_CONTROL])
 				DX=20;
 			else
 				DX/=sqrt(AR_Y);//average zoom
@@ -4115,7 +3478,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				return 0;
 			break;
 		}
-		keyboard[wParam]=1;
+		kb[wParam]=1;
 		if(!timer)
 			InvalidateRect(ghWnd, 0, 0);
 		if(message==WM_SYSKEYDOWN)
@@ -4123,15 +3486,15 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 		return 0;
 	case WM_KEYUP:
 	case WM_SYSKEYUP:
-		keyboard[wParam]=0;
+		kb[wParam]=0;
 		switch(wParam)
 		{
 		case VK_UP:case VK_DOWN:case VK_LEFT:case VK_RIGHT:
 		case VK_ADD:case VK_SUBTRACT://numpad
 		case VK_OEM_PLUS:case VK_OEM_MINUS:
 		case VK_RETURN:case VK_BACK:
-			if(kpressed)//start+key
-				--kpressed;
+			if(kp)//start+key
+				--kp;
 			break;
 		}
 		break;
