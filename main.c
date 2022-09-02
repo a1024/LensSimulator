@@ -2467,7 +2467,6 @@ void	meanvar(double *arr, int count, int stride, double *ret_mean, double *ret_v
 		*ret_var=var;
 }
 
-
 typedef struct SurfaceParamsStruct
 {
 	SurfaceType type;
@@ -2477,7 +2476,7 @@ typedef struct SurfaceParamsStruct
 		ap_min, ap_max,
 		nL, nR;
 } SurfaceParams;
-void			get_params(OpticComp const *e1, AreaIdx const *aidx, double lambda, SurfaceParams *params)
+void	get_params(OpticComp const *e1, AreaIdx const *aidx, double lambda, SurfaceParams *params)
 {
 	Boundary const *surface=e1->info+aidx->bound_idx;
 	params->type=surface->type[aidx->is_outer_not_inner];
@@ -2487,14 +2486,14 @@ void			get_params(OpticComp const *e1, AreaIdx const *aidx, double lambda, Surfa
 	params->ap_max=surface->r_max[aidx->is_outer_not_inner];
 
 	params->nL=aidx->bound_idx?lambda2n(e1->info[aidx->bound_idx-1].n_next, lambda):1;
-	params->nR=lambda2n(surface->n_next, lambda);
+	params->nR=aidx->bound_idx<e1->nBounds-1?lambda2n(surface->n_next, lambda):1;
 	//double n=lambda2n(surface->n_next, lambda);
 	//if(!aidx->bound_idx)
 	//	params->nL=1, params->nR=n;
 	//else if(aidx->bound_idx==e1->nBounds-1)
 	//	params->nL=n, params->nR=1;
 }
-void			simulate(int user)//number of rays must be even, always double-sided
+void	simulate(int user)//number of rays must be even, always double-sided
 {
 	ArrayHandle intersections;
 
@@ -2747,7 +2746,7 @@ void			simulate(int user)//number of rays must be even, always double-sided
 	//cleanup
 	array_free(&intersections);
 }
-double			calc_loss()
+double	calc_loss()
 {
 	return r_blur;
 
@@ -2755,6 +2754,8 @@ double			calc_loss()
 	//focal_length-=ray_spread_mean[n_count>>1];
 	//return spread+focal_length*focal_length;
 }
+
+
 int				shift_lambdas(double delta)
 {
 	if(!photons||!photons->count)
@@ -3340,10 +3341,10 @@ void			render()
 					if(max_ap<oe->info[k].r_max[1])
 						max_ap=oe->info[k].r_max[1];
 				}
-				printed=sprintf_s(g_buf, G_BUF_SIZE, "%s %c\t%g", current_elem==ke?"->":" ", oe->active?'V':'X', max_ap);
+				printed=sprintf_s(g_buf, G_BUF_SIZE, "%s %c\t%g", current_elem==ke?"->":" ", oe->active?'V':'X', max_ap*2);
 				for(int k=0;k<oe->nBounds;++k)
 				{
-					printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\t%g", oe->info[k].r_max[1]);
+					printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\t%g", oe->info[k].r_max[1]*2);
 					if(k+1>=oe->nBounds)
 						break;
 					printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\t%g", oe->info[k].n_next);
@@ -3676,7 +3677,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			{
 				double delta=keyboard[VK_SHIFT]?10*dx:dx;
 				if(keyboard[VK_LEFT])	change_pos(oe, -delta), e=1;
-				if(keyboard[VK_RIGHT])	change_pos(oe, -delta), e=1;
+				if(keyboard[VK_RIGHT])	change_pos(oe, delta), e=1;
 				if(keyboard[VK_UP])		change_aperture_comp(oe, 1+0.1*dx), e=1;
 				if(keyboard[VK_DOWN])	change_aperture_comp(oe, 1/(1+0.1*dx)), e=1;
 			}
