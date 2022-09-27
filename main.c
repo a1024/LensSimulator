@@ -2361,7 +2361,7 @@ int		calc_interaction(SurfaceType type, int active, double n_before, double n_af
 	}
 	return 0;
 }
-int		hit_ray_surface(double x1, double y1, double x2, double y2, double ap_min, double ap_max, double n_before, double n_after, double x, double R, SurfaceType type, int active, Point *ret_line)//(x1, y1) is in present
+int		hit_ray_surface(double x1, double y1, double x2, double y2, double ap_min, double ap_max, double n_left, double n_right, double x, double R, SurfaceType type, int active, Point *ret_line)//(x1, y1) is in present
 {
 	int hit;
 	Point p[2];
@@ -2376,7 +2376,10 @@ int		hit_ray_surface(double x1, double y1, double x2, double y2, double ap_min, 
 		normalize(x2-x1, y2-y1, p);
 		cos_in=p->x;
 		sin_in=p->y;
-		hit+=calc_interaction(type, active, n_before, n_after, cos_in, sin_in, &cos_em, &sin_em);
+		if(cos_in<0)
+			hit+=calc_interaction(type, active, n_right, n_left, cos_in, sin_in, &cos_em, &sin_em);
+		else
+			hit+=calc_interaction(type, active, n_left, n_right, cos_in, sin_in, &cos_em, &sin_em);
 		ret_line[1].x=ret_line[0].x+cos_em;
 		ret_line[1].y=ret_line[0].y+sin_em;
 	}
@@ -2389,10 +2392,14 @@ int		hit_ray_surface(double x1, double y1, double x2, double y2, double ap_min, 
 		normalize(sgn_star(R)*(xcenter-ret_line[0].x), -sgn_star(R)*ret_line[0].y, p+1);//p[1] is the surface normal unit vector = normalize(sgn(radius)*(center-hit))
 		cos_in=p[0].x*p[1].x+p[0].y*p[1].y;//cosine of angle between two unit vectors is the dot product
 		sin_in=p[0].y*p[1].x-p[0].x*p[1].y;//sine of angle between two unit vectors is the cross product
-		hit+=calc_interaction(type, active, n_before, n_after, cos_in, sin_in, &cos_em, &sin_em);
+		if(cos_in<0)
+			hit+=calc_interaction(type, active, n_right, n_left, cos_in, sin_in, &cos_em, &sin_em);
+		else
+			hit+=calc_interaction(type, active, n_left, n_right, cos_in, sin_in, &cos_em, &sin_em);
 		double
 			c2=cos_em*p[1].x-sin_em*p[1].y,//cos(em+n)=cos(em)*cos(n)-sin(em)*sin(n)
 			s2=sin_em*p[1].x+cos_em*p[1].y;//sin(em+n)=sin(em)*cos(n)+cos(em)*sin(n)
+
 		//if(hit!=2&&inc_dir!=sgn_star(c2))//what is this?
 		//	c2=-c2, s2=-s2;
 		ret_line[1].x=ret_line[0].x+c2;
@@ -2783,19 +2790,25 @@ int				shift_lambdas(double delta)
 	}
 	return 1;
 }
-void			change_aperture(OpticComp *oe, double factor)
+void			change_aperture_bound(OpticComp *oe, int kb, double factor)
 {
-	oe->info[0].r_max[0]*=factor;
-	oe->info[0].r_max[1]*=factor;
-	oe->info[1].r_max[0]*=factor;
-	oe->info[1].r_max[1]*=factor;
+	oe->info[kb].r_max[0]*=factor;
+	oe->info[kb].r_max[1]*=factor;
+}
+void			change_aperture_comp(OpticComp *oc, double factor)
+{
+	for(int kb=0;kb<oc->nBounds;++kb)
+	{
+		oc->info[kb].r_max[0]*=factor;
+		oc->info[kb].r_max[1]*=factor;
+	}
 }
 void			change_aperture_all(double factor)
 {
 	for(int ke=0;ke<(int)elements->count;++ke)
 	{
 		OpticComp *oe=(OpticComp*)array_at(&elements, ke);
-		change_aperture(oe, factor);
+		change_aperture_comp(oe, factor);
 	}
 }
 void			change_diopter(double *r, double delta)
@@ -2815,19 +2828,6 @@ void			change_pos(OpticComp *oc, double delta)
 {
 	for(int kb=0;kb<oc->nBounds;++kb)
 		oc->info[kb].pos+=delta;
-}
-void			change_aperture_bound(OpticComp *oe, int kb, double factor)
-{
-	oe->info[kb].r_max[0]*=factor;
-	oe->info[kb].r_max[1]*=factor;
-}
-void			change_aperture_comp(OpticComp *oc, double factor)
-{
-	for(int kb=0;kb<oc->nBounds;++kb)
-	{
-		oc->info[kb].r_max[0]*=factor;
-		oc->info[kb].r_max[1]*=factor;
-	}
 }
 void			change_thickness(OpticComp *oc, int kb, double delta)
 {

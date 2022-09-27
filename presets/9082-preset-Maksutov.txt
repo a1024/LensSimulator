@@ -22,18 +22,23 @@ dimensions:	mm, cm (default), m, inch, ft
 wavelength:	A (Angestrom), nm (default)
 */
 
-//elem	corrector, n=1.512, ap=12cm, pos=10cm, th=1cm;
-//	left	=-15cm;
-//	right	=16cm: mirror, 2cm, transp;
+//maksutov-cassegrain telescope
+elem	corrector, n=1.512, ap=12cm, pos=10cm, th=1cm;
+	left	=-15cm;
+	right	=16cm: mirror, 2cm, transp;
 
-elem	primary, n=1.512, ap=16cm, pos=50cm, th=1.6cm;
-	left	=-26cm;
-	right	=100cm: mirror;
+elem	primary, n=1.512, ap=12.5cm, pos=corrector+13.5cm, th=1cm;
+	left	=-37cm: transp, 2cm, mirror;
+	right	=plane;
 
 light:	470nm, 550nm, 640nm;	//blue, green, red
-rays:	10, primary.left;
+rays:	10, corrector.right.outer;
 
 path:
-	primary.left,
-	primary.right,
-	primary.left;
+	corrector.left,
+	corrector.right.outer,
+	primary.left.outer,
+	corrector.right.inner;
+
+//	primary.left.inner,
+//	primary.right;

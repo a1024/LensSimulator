@@ -1,0 +1,51 @@
+/*
+2022-08-08Mo
+KEYWORDS
+comp <name>:            Glass component declaration
+elem <name>:            2-sided glass element declaration (deprecated)
+inactive:               Makes component initially inactive
+ap:                     Aperture (diameter) (optional)
+n:                      Refractive index
+pos:                    x-distance from origin
+th:                     Thickness
+left, right:            Surface specifications
+mirror/transp/hole:     Surface type (transp is default)
+
+light:  Wavelength list in nanometers (nm)
+
+rays:   Specify the incident ray count
+        and initial target area (not necessarily the first boundary)
+
+path:   Describe the correct light path through the optical device
+
+UNITS
+dimensions:     mm, cm (default), m, inch, ft
+wavelength:     A (Angestrom), nm (default)
+*/
+
+//2022-09-27Tu 061624PM
+
+elem	corrector, pos=10cm, th=1cm, n=1.512;
+	left	=-15cm: transp, 6cm, transp, 6cm;
+	right	=16cm: mirror, 2cm, transp, 6cm;
+
+elem	primary, pos=37.5317cm, th=2cm, n=1.512;
+	left	=-52.1236cm: transp, 6.25cm, transp, 6.25cm;
+	right	=46.7773cm: transp, 2cm, mirror, 6.25cm;
+
+elem	secondary, pos=11.4715cm, th=1cm, n=1.512;
+	left	=10.7665cm: mirror, 2cm, transp, 2cm;
+	right	=6.17594cm: transp, 2cm, transp, 2cm;
+
+light:	470nm, 550nm, 640nm;
+rays:	10, corrector.b.outer;
+
+path:
+	corrector.a.inner,
+	corrector.b.outer,
+	primary.a.inner,
+	primary.b.outer,
+	primary.a.inner,
+	secondary.b.inner,
+	secondary.a.inner,
+	secondary.b.inner;

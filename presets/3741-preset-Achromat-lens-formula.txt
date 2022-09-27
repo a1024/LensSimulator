@@ -1,0 +1,45 @@
+/*
+2022-08-08Mo
+KEYWORDS
+elem <name>:	glass element declaration
+inactive:	makes element initially inactive
+ap:		aperture (diameter) (optional)
+n:		refractive index
+pos:		x-distance from origin
+th:		thickness
+left, right:	surface specifications
+mirror/transp/hole: surface type (transp is default)
+
+light:	wavelength list in nanometers (nm)
+
+rays:	specify the incident ray count
+	and initial target area (not necessarily the first boundary)
+
+path:	describe the correct light path through the optical device
+
+UNITS
+dimensions:	mm, cm (default), m, inch, ft
+wavelength:	A (Angestrom), nm (default)
+*/
+
+
+//achromatic lens
+
+comp	objective, pos=0, ap=12cm;
+	bound	=42.79646cm;
+	medium	th=1cm, n=1.52;
+	bound	=-46.5cm;
+	medium	th=1cm, n=1.62;
+	bound	=plane;
+
+//elem	corrector, n=1.512, ap=12cm, pos=18.8cm, th=1cm;
+//	left	=16cm;
+//	right	=-15cm;
+
+light:	470nm, 550nm, 640nm;	//blue, green, red
+rays:	10, objective.a;
+
+path:
+	objective.a,
+	objective.b,
+	objective.c;

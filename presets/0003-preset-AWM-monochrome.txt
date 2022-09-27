@@ -8,7 +8,6 @@ n:		refractive index
 pos:		x-distance from origin
 th:		thickness
 left, right:	surface specifications
-plane:		planar surface
 mirror/transp/hole: surface type (transp is default)
 
 light:	wavelength list in nanometers (nm)
@@ -23,21 +22,19 @@ dimensions:	mm, cm (default), m, inch, ft
 wavelength:	A (Angestrom), nm (default)
 */
 
+elem	objective, n=1.512, ap=12cm, pos=0, th=0.8cm;
+	left	=51.2cm;
+	right	=plane;
 
-//Newtonian telescope
+elem	corrector, n=1.512, ap=12cm, pos=24.1cm, th=1cm;
+	left	=16cm;
+	right	=-15cm;
 
-elem	primary, n=1.512, ap=12cm, pos=100cm, th=1cm;
-	left	=-200cm: mirror;	//-110
-	right	=plane: transp;
-
-elem	corrector, n=1.512, ap=5cm, pos=23.5cm, th=1cm;
-	left	=-9cm;
-	right	=10cm;
-
-light:	470nm, 550nm, 640nm;	//blue, green, red
-rays:	10, primary.left;
+light:	640nm;	//red
+rays:	10, objective.left;
 
 path:
-	primary.left,
-	corrector.right,
-	corrector.left;
+	objective.left,
+	objective.right,
+	corrector.left,
+	corrector.right;

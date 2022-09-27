@@ -1,7 +1,7 @@
 /*
 2022-08-08Mo
 KEYWORDS
-elem <name>:	         glass element declaration
+elem <name>:            glass element declaration
 inactive:               makes element initially inactive
 ap:                     aperture (diameter) (optional)
 n:                      refractive index
@@ -15,29 +15,34 @@ light:  wavelength list in nanometers (nm)
 rays:   specify the incident ray count
         and initial target area (not necessarily the first boundary)
 
-path:	 describe the correct light path through the optical device
+path:   describe the correct light path through the optical device
 
 UNITS
 dimensions:     mm, cm (default), m, inch, ft
 wavelength:     A (Angestrom), nm (default)
 */
 
-//2022-08-21Su 104052PM
+//2022-08-31We 110511AM
 
-elem	primary, n=1.512, pos=120cm, th=1cm, ap=12;
-	left	=-70.0756cm;
-	right	=199.437cm:	mirror;
+elem	corrector, n=1.512, pos=5.66816cm, th=1.85639cm, ap=12cm;
+	left = -9.79833cm: transp;
+	right = 10.2154cm: mirror, 2cm, transp;
 
-elem	corrector, n=1.512, pos=23.0579cm, th=1.0436cm, ap=4;
-	left	=-7.95708cm;
-	right	=8.72881cm;
+elem	primary, n=1.512, pos=24.6129cm, th=1cm, ap=12.5cm;
+	left = -37cm: transp, 2cm, mirror;
+	right = 0cm: transp;
+
+elem	secondary, n=1.512, pos=10cm, th=1cm, ap=4cm;
+	left = plane;
+	right = 10cm: mirror;
+
 
 light:	470nm, 550nm, 640nm;
-rays:	10, primary.left.inner;
+rays:	10, corrector.right.outer;
 
 path:
-	primary.left.inner,
-	primary.right.inner,
-	primary.left.inner,
-	corrector.right.inner,
-	corrector.left.inner;
+	corrector.left,
+	corrector.right.outer,
+	primary.left.outer;
+
+//	secondary.right;
