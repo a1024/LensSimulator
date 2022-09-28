@@ -589,9 +589,15 @@ double			tan_tilt=0,//rays tilt
 				x_sensor=0,//x-coordinate of best sensor position
 				y_focus=0,
 				r_blur=0;//main loss value
+int				track_focus=0;
+double			saved_VX=0, saved_VY=0;
 
 double			*history=0;
 int				hist_idx=0;
+
+double			VX=0, VY=0, DX=20, AR_Y=1, Xstep, Ystep;
+int				prec;
+char			timer=0, drag=0, m_bypass=0, clearScreen=0, _2d_drag_graph_not_window=0;
 
 
 #if 1
@@ -2752,6 +2758,9 @@ void	simulate(int user)//number of rays must be even, always double-sided
 
 	//cleanup
 	array_free(&intersections);
+
+	if(track_focus)
+		VX=x_sensor, VY=y_focus;
 }
 double	calc_loss()
 {
@@ -2975,9 +2984,6 @@ void			update_params(double *grad, int *var_idx, int nvars, int exclude_elem)
 #endif
 
 
-double			VX=0, VY=0, DX=20, AR_Y=1, Xstep, Ystep;
-int				prec;
-char			timer=0, drag=0, m_bypass=0, clearScreen=0, _2d_drag_graph_not_window=0;
 void			calculate_scale(double DN, int n, double *Nstep)
 {
 	const double ln10=log(10.);
@@ -3369,10 +3375,10 @@ void			render()
 #endif
 			}
 			y+=16;
-			GUITPrint(ghMemDC, 0, y, 0, "\tSensor: %d/%d rays  Std.Dev %lfmm  blurSize=%lfmm%s",
+			GUITPrint(ghMemDC, 0, y, 0, "\tSensor: %d/%d rays  Std.Dev %lfmm  Dblur=%lfmm%s",
 				out_path_count,
 				in_path_count,
-				10*r_blur, 
+				10*r_blur,
 				20*r_blur,
 				no_system?"\t\tNO SYSTEM":(no_focus?"\t\tNO FOCUS":"")
 			);
@@ -3412,7 +3418,7 @@ void			render()
 								//	eq_focal_length=fabs(xa-x0);
 								double eq_focal_length=fabs(ymax*(line[0].x-line[1].x)/(line[0].y-line[1].y));
 								ymax*=2;
-								GUITPrint(ghMemDC, 0, y, 0, "\tD=%g, Deq=%g, Feq=%gcm, f/%g", ymax, ap*2, eq_focal_length, eq_focal_length/ymax);
+								GUITPrint(ghMemDC, 0, y, 0, "\tD=%g, Deq=%g, Feq=%gcm, f/%g, Dblur/Deq=%.8lf", ymax, ap*2, eq_focal_length, eq_focal_length/ymax, r_blur/ap);
 								printed=1;
 							}
 							break;
@@ -3420,7 +3426,7 @@ void			render()
 					}
 				}
 				if(!printed)
-					GUITPrint(ghMemDC, 0, y, 0, "\tD=%g, Deq=%g", ymax, ap);
+					GUITPrint(ghMemDC, 0, y, 0, "\tD=%g, Deq=%g, Dblur/Deq=%.8lf", ymax, ap, r_blur/ap);
 				y+=16;
 			}
 			if(tan_tilt)
@@ -3673,7 +3679,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			int e=0;
 			double dx=DX/w, delta;//horizontal pixel size in real units: the more you zoom in, the finer is the change
 			OpticComp *oe=(OpticComp*)array_at(&elements, current_elem);
-			if(keyboard[VK_OEM_3])//<>pos/^vAp
+			if(keyboard[VK_OEM_3])//<> pos / ^v Ap
 			{
 				double delta=keyboard[VK_SHIFT]?10*dx:dx;
 				if(keyboard[VK_LEFT])	change_pos(oe, -delta), e=1;
@@ -3712,17 +3718,17 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			{
 				if(_2d_drag_graph_not_window)
 				{
-					if(keyboard[VK_LEFT	])	VX+=10*dx;
-					if(keyboard[VK_RIGHT])	VX-=10*dx;
-					if(keyboard[VK_UP	])	VY-=10*dx/AR_Y;
-					if(keyboard[VK_DOWN	])	VY+=10*dx/AR_Y;
+					if(keyboard[VK_LEFT	])	track_focus=0, VX+=10*dx;
+					if(keyboard[VK_RIGHT])	track_focus=0, VX-=10*dx;
+					if(keyboard[VK_UP	])	track_focus=0, VY-=10*dx/AR_Y;
+					if(keyboard[VK_DOWN	])	track_focus=0, VY+=10*dx/AR_Y;
 				}
 				else
 				{
-					if(keyboard[VK_LEFT	])	VX-=10*dx;
-					if(keyboard[VK_RIGHT])	VX+=10*dx;
-					if(keyboard[VK_UP	])	VY+=10*dx/AR_Y;
-					if(keyboard[VK_DOWN	])	VY-=10*dx/AR_Y;
+					if(keyboard[VK_LEFT	])	track_focus=0, VX-=10*dx;
+					if(keyboard[VK_RIGHT])	track_focus=0, VX+=10*dx;
+					if(keyboard[VK_UP	])	track_focus=0, VY+=10*dx/AR_Y;
+					if(keyboard[VK_DOWN	])	track_focus=0, VY-=10*dx/AR_Y;
 				}
 			}
 			if(keyboard[VK_ADD		]||keyboard[VK_RETURN	]||keyboard[VK_OEM_PLUS	])
@@ -3788,6 +3794,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				if(_2d_drag_graph_not_window)
 					dx=-dx, dy=-dy;
 				VX+=dx*DX/w, VY+=dy*DX/(w*AR_Y);
+				track_focus=0;
 				if(!timer)
 					InvalidateRect(ghWnd, 0, 0);
 				SetCursorPos(centerP.x, centerP.y);//moves mouse
@@ -3824,27 +3831,30 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 		{
 			double dx=(mx-w/2)*DX/w, dy=(h/2-my)*DX/(w*AR_Y);
 			int mw_forward=((short*)&wParam)[1]>0;
-			if(keyboard[VK_CONTROL])
+			if(keyboard[VK_CONTROL])//change nrays
 			{
 				nrays+=mw_forward-!mw_forward;
 				if(nrays<1)
 					nrays=1;
 				simulate(1);
 			}
-			else if(keyboard['X'])
+			else if(keyboard['X'])//scale x-axis
 			{
 					 if(mw_forward)	DX/=1.1, AR_Y/=1.1, VX=VX+dx-dx/1.1;
 				else				DX*=1.1, AR_Y*=1.1, VX=VX+dx-dx*1.1;
+				track_focus=0;
 			}
-			else if(keyboard['Y'])
+			else if(keyboard['Y'])//scale y-axis
 			{
 					 if(mw_forward)	AR_Y*=1.1, VY=VY+dy-dy/1.1;
 				else				AR_Y/=1.1, VY=VY+dy-dy*1.1;
+				track_focus=0;
 			}
-			else
+			else//zoom
 			{
 					 if(mw_forward)	DX/=1.1, VX=VX+dx-dx/1.1, VY=VY+dy-dy/1.1;
 				else				DX*=1.1, VX=VX+dx-dx*1.1, VY=VY+dy-dy*1.1;
+				track_focus=0;
 			}
 		}
 		function1();
@@ -4035,8 +4045,19 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			}
 			break;
 		case 'T':
-			VX=x_sensor;
-			VY=y_focus;
+			track_focus=!track_focus;
+			if(track_focus)
+			{
+				saved_VX=VX;
+				saved_VY=VY;
+				VX=x_sensor;
+				VY=y_focus;
+			}
+			else
+			{
+				VX=saved_VX;
+				VY=saved_VY;
+			}
 			break;
 		//case 'M':
 		//	twosides=!twosides;

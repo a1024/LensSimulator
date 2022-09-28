@@ -23,15 +23,15 @@ dimensions:     mm, cm (default), m, inch, ft
 wavelength:     A (Angestrom), nm (default)
 */
 
-//2022-09-27Tu 062114PM
+//2022-09-28We 032444PM
 
 elem	primary, pos=100cm, th=1cm, n=1.512;
-	left	=-200cm: mirror, 6cm, transp, 6cm;
+	left	=-80.5882cm: mirror, 6cm, transp, 6cm;
 	right	=0cm: transp, 6cm, transp, 6cm;
 
-elem	corrector, pos=15.865cm, th=0.976785cm, n=1.512;
-	left	=-5.16075cm: transp, 2.5cm, transp, 2.5cm;
-	right	=5.50828cm: transp, 2.5cm, transp, 2.5cm;
+elem	corrector, pos=63.8178cm, th=0.375399cm, n=1.512;
+	left	=-1.47744cm: transp, 1.03577cm, transp, 1.03577cm;
+	right	=1.50413cm: transp, 1.0358cm, transp, 1.0358cm;
 
 light:	470nm, 550nm, 640nm;
 rays:	10, primary.a.inner;
