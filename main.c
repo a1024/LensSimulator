@@ -2329,7 +2329,7 @@ int		calc_interaction(SurfaceType type, int active, double n_before, double n_af
 		if(active)//refract
 		{
 			double temp=n_before*sin_in;
-			if(temp>n_after)//total internal reflection
+			if(fabs(temp)>n_after)//total internal reflection
 			{
 				*sin_em=sin_in;
 				*cos_em=-cos_in;
