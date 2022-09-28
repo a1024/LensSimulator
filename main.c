@@ -586,7 +586,9 @@ int				nrays=10,
 				no_focus=0,
 				no_system=0;
 double			tan_tilt=0,//rays tilt
-				x_sensor=0,//x-coordinate of best sensor position (mean of mirror-twin-ray x-intersections)
+				x_sensor_est=0,//x-coordinate of best sensor position (mean of mirror-twin-ray x-intersections)
+				x_focus_offset=0,//user's offset added to x_sensor_est
+				x_sensor=0,//= x_sensor_est + x_focus_offset
 				y_focus=0,//mean of y-intersections
 				r_blur=0;//std.dev of y-intersections (main loss value)
 int				track_focus=0;
@@ -2610,7 +2612,7 @@ void	simulate(int user)//number of rays must be even, always double-sided
 			ARRAY_ALLOC(Point, path->points, 0, 0, 2, 0);
 			Point *points=ARRAY_APPEND(path->points, 0, 2, 1, 0);
 			points->x=xstart;
-			points->y=ymin+((kp2>>1)+1)*(ymax-ymin)/((ph->paths->count>>1)+1);
+			points->y=ymin+(ymax-ymin)*((kp2>>1)+1)/((ph->paths->count>>1)+1);
 			//points->y=ymin+((kp2>>1)+1)*(ymax-ymin)/(ph->paths->count>>1);//X  top ray doesn't emerge
 			if(kp2&1)//rays are in pairs mirrored by ground line, odd rays are below the even rays
 				points->y=-points->y;
@@ -2690,14 +2692,15 @@ void	simulate(int user)//number of rays must be even, always double-sided
 		}
 
 		if(!yintersections->count)
-			x_sensor=100, no_focus=1;
+			x_sensor_est=100, no_focus=1;
 		else
 		{
 			//calculate mean & standard deviation of symmetric x-intersections
-			meanvar((double*)yintersections->data, (int)yintersections->count, 2, &x_sensor, 0);
+			meanvar((double*)yintersections->data, (int)yintersections->count, 2, &x_sensor_est, 0);
 			array_clear(&yintersections);
 		}
 	}
+	x_sensor=x_sensor_est+x_focus_offset;
 
 	//extend emerging rays to reach sensor
 	for(int kp=0;kp<(int)photons->count;++kp)
@@ -3186,18 +3189,26 @@ void			render()
 			{
 				Point *p1=(Point*)array_at(&yintersections, 0);
 				double rmax=p1->y;
-				for(int k=2;k<yintersections->count;k+=2)
+				for(int k=2;k<(int)yintersections->count;k+=2)
 				{
 					Point *p2=(Point*)array_at(&yintersections, k);
 					double r=fabs(p2->y);
 					if(rmax<r)
 						rmax=r;
 				}
+
 				double th1=0;
-				int x1=real2screenX(x_sensor+p1->y, scale),
-					y1=real2screenY(y_focus, scale),
-					x2=0, y2=0;
-				for(int k=2;k<yintersections->count;k+=2)//pairs of points: {x0, y0}, {x0', y0'}, {x2, y2}, {x2', y2'}
+				int x1, y1, x2, y2;
+
+				x1=real2screenX(x_sensor+p1->y, scale);
+				y1=real2screenY(y_focus, scale);
+				x2=0, y2=0;
+
+				MoveToEx(ghMemDC, x1-5, y1, 0), LineTo(ghMemDC, x1+5, y1);//mark the start of the polar curve
+				MoveToEx(ghMemDC, x1, y1-5, 0), LineTo(ghMemDC, x1, y1+5);
+				//Ellipse(ghMemDC, x1-5, y1-5, x1+5, y1+5);//X  gets confused with r_blur ellipse
+
+				for(int k=2;k<(int)yintersections->count;k+=2)//pairs of points: {x0, y0}, {x0', y0'}, {x2, y2}, {x2', y2'}
 				{
 					Point *p2=(Point*)array_at(&yintersections, k);
 					double th2=M_PI*(k>>1)/((yintersections->count>>1)-1);
@@ -3207,6 +3218,22 @@ void			render()
 					LineTo(ghMemDC, x2, y2);
 					p1=p2, th1=th1, x1=x2, y1=y2;
 				}
+				
+				hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+				p1=(Point*)array_at(&yintersections, 1);
+				x1=real2screenX(x_sensor+p1->y, scale);
+				y1=real2screenY(y_focus, scale);
+				for(int k=3;k<(int)yintersections->count;k+=2)//draw mirror-twin hitpoints for coma
+				{
+					Point *p2=(Point*)array_at(&yintersections, k);
+					double th2=-M_PI*(k>>1)/((yintersections->count>>1)-1);
+					int x2=real2screenX(x_sensor+p2->y*cos(th2), scale),
+						y2=real2screenY(y_focus+p2->y*sin(th2), scale);
+					MoveToEx(ghMemDC, x1, y1, 0);
+					LineTo(ghMemDC, x2, y2);
+					p1=p2, th1=th1, x1=x2, y1=y2;
+				}
+				hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
 			}
 		}
 
@@ -3245,7 +3272,7 @@ void			render()
 				if(history[idx]>=0)
 				{
 					int tempy=h-(int)(history[idx]*histmax);
-					Ellipse(ghMemDC, idx-10, tempy-10, idx+10, tempy+10);
+					Ellipse(ghMemDC, idx-10, tempy-10, idx+10, tempy+10);//mark history cursor
 				}
 			}
 
@@ -3720,6 +3747,11 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				if(keyboard[VK_UP])		change_aperture_comp(oe, 1+0.1*dx), e=1;
 				if(keyboard[VK_DOWN])	change_aperture_comp(oe, 1/(1+0.1*dx)), e=1;
 			}
+			if(keyboard['B'])//adjust focus
+			{
+				if(keyboard[VK_LEFT])	x_focus_offset-=delta, e=1;
+				if(keyboard[VK_RIGHT])	x_focus_offset+=delta, e=1;
+			}
 			delta*=0.01;
 			for(int kb=0;kb<oe->nBounds;++kb)
 			{
@@ -3953,7 +3985,9 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				"1~6 S: Set value of corresponding property\n"
 #endif
 				"\n"
-				"Shift R:\tReset all glass elements\n"
+				"B left/right:\tAdjust focus\n"
+				"\n"
+				"Shift R:\tReset all parameters\n"
 			//	"1~6 R: Reset corresponding property of current glass element\n"
 				"Alt R:\tReset ray tilt\n"
 				"\n"
@@ -4049,7 +4083,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			for(int k=0;k<w;++k)
 				history[k]=-1;
 			break;
-		case 'P':
+		case 'P'://TODO: support achromat
 			{
 				OpticComp *oe=(OpticComp*)array_at(&elements, current_elem), *oe2;
 				int e=0;
@@ -4124,12 +4158,14 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				OpticComp *oe0=(OpticComp*)array_at(&ebackup, current_elem);
 				if(keyboard[VK_MENU])
 				{
+					x_focus_offset=0;
 					tan_tilt=0;
 					e=1;
 				}
 				else if(keyboard[VK_SHIFT])
 				{
 					memcpy(elements->data, ebackup->data, elements->count*sizeof(OpticComp));
+					x_focus_offset=0;
 					tan_tilt=0;
 					//ap=ap0;
 					//lambda=lambda0;
@@ -4153,6 +4189,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				{
 					if(!keyboard[VK_CONTROL])
 						DX=20, AR_Y=1, function1();
+					track_focus=0;
 					VX=VY=0;
 				}
 			}
