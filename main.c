@@ -3333,7 +3333,10 @@ void			render()
 				printed=sprintf_s(g_buf, G_BUF_SIZE, "%s %c\t%g", current_elem==ke?"->":" ", oe->active?'V':'X', oe->info[0].pos);
 				for(int k=0;k<oe->nBounds;++k)
 				{
-					printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\t%g", oe->info[k].radius);
+					double r=oe->info[k].radius;
+					if(k==(int)elements->count-1)
+						r=-r;
+					printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\t%g", r);
 					if(k+1>=oe->nBounds)
 						break;
 					printed+=sprintf_s(g_buf+printed, G_BUF_SIZE-printed, "\t%g", oe->info[k+1].pos-oe->info[k].pos);
