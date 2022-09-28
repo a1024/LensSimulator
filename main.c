@@ -3676,18 +3676,25 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 		break;
 	case WM_TIMER:
 		{
-			int e=0;
-			double dx=DX/w, delta;//horizontal pixel size in real units: the more you zoom in, the finer is the change
 			OpticComp *oe=(OpticComp*)array_at(&elements, current_elem);
+			double dx=DX/w, delta;//horizontal pixel size in real units: the more you zoom in, the finer is the change
+			int e=0;
+
+			if(keyboard[VK_SHIFT])
+				delta=10*dx;
+			else if(keyboard[VK_CONTROL])
+				delta=0.1*dx;
+			else
+				delta=dx;
+
 			if(keyboard[VK_OEM_3])//<> pos / ^v Ap
 			{
-				double delta=keyboard[VK_SHIFT]?10*dx:dx;
 				if(keyboard[VK_LEFT])	change_pos(oe, -delta), e=1;
 				if(keyboard[VK_RIGHT])	change_pos(oe, delta), e=1;
 				if(keyboard[VK_UP])		change_aperture_comp(oe, 1+0.1*dx), e=1;
 				if(keyboard[VK_DOWN])	change_aperture_comp(oe, 1/(1+0.1*dx)), e=1;
 			}
-			delta=keyboard[VK_SHIFT]?0.01*dx:0.001*dx;
+			delta*=0.01;
 			for(int kb=0;kb<oe->nBounds;++kb)
 			{
 				int idx=kb<<1;
@@ -3702,7 +3709,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 					if(keyboard[VK_DOWN	])	change_aperture_bound(oe, kb, 1+0.1*dx), e=1;
 				}
 			}
-			delta=keyboard[VK_SHIFT]?10*dx:dx;
+			delta*=100;
 			for(int kb=1;kb<oe->nBounds;++kb)
 			{
 				int idx=(kb-1)<<1;
@@ -3888,7 +3895,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				"Up/down/left/right/drag:\t\tNavigate\n"
 				"+/-/Enter/Backspace/Mousewheel:\tZoom\n"
 				"X/Y +/-/Enter/Backspace:\t\tChange aspect ratio\n"
-				"T:\tGo to focal point\n"
+				"T:\tTrack focal point\n"
 				"R:\tReset view\n"
 				"E:\tReset scale\n"
 				"C:\tToggle clear screen\n"
@@ -3898,16 +3905,17 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				"Space:\t\tToggle glass element\n"
 				"F:\t\tFlip glass element\n"
 				"\n"
-				"`/1/...9 S:\tSet top row parameter\n"
-				"`/1/...9 Z:\tSet bottom row parameter\n"
-				"` (grave accent) left/right:\tMove glass component\n"
-				"` (grave accent) up/down:\tChange component aperture (Ap)\n"
-				"1/3/5/7/9 left/right:\t\tChange corresponding boundary radius (R)\n"
-				"1/3/5/7/9 up/down:\t\tChange corresponding boundary aperture (ap)\n"
-				"2/4/6/8 left/right:\t\tChange corresponding medium thickness (th)\n"
-				"2/4/6/8 up/down:\t\tChange corresponding medium refractive index (n)\n"
+				"`(grave accent)/1/...9 S:\tSet top row parameter\n"
+				"`(grave accent)/1/...9 Z:\tSet bottom row parameter\n"
+				"`(grave accent) left/right:\tMove glass component\n"
+				"`(grave accent) up/down:\tChange component aperture (Ap)\n"
+				"1/3/5/7/9 left/right:\tChange corresponding boundary radius (R)\n"
+				"1/3/5/7/9 up/down:\tChange corresponding boundary aperture (ap)\n"
+				"2/4/6/8 left/right:\tChange corresponding medium thickness (th)\n"
+				"2/4/6/8 up/down:\tChange corresponding medium refractive index (n)\n"
 				"Speed of change depends on zoom level\n"
-#if 0
+				"Hold Shift for fast motion, Ctrl for slow motion\n"
+#if 0//don't uncomment this
 				"1 left/right: Move glass element\n"
 				"2 left/right: Change left diopter\n"
 				"3 left/right: Change thickness\n"
@@ -3927,7 +3935,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				"Shift +/-/Enter/Backspace:\tChange ray tilt\n"
 				"Ctrl Mousewheel:\t\tChange ray count\n"
 				"\n"
-				"H:\tClear history buffer\n"
+				"H:\tClear loss function history\n"
 #ifdef ENABLE_OPTIMIZER
 				"O: Optimize current glass element\n"
 				"Shift O: Optimize all glass elements\n"

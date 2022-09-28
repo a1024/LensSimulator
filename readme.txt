@@ -1,13 +1,11 @@
 Lens Simulator
 
-For design and optimization of compound telescope objective lenses out of simple lenses of same refractive index.
-
-
-While changing glass element parameters, the history of the standard deviation of blurriness is drawn on the screen.
+For design of light collecting optical objective systems.
+While changing parameters, the history of the standard deviation of blurriness (the loss function) is drawn on the screen.
 
 
 Controls:
-	F1: Show controls
+	F1: Show controls (more detail and up-to-date than here)
 
 	Control pan and zoom with mouse
 	Enter/backspace: zoom
@@ -22,7 +20,6 @@ Controls:
 	2 + P: make left surface planar
 	4 + P: make right surface planar
 	Ctrl + wheel: change number of rays
-	O: optimize for best focus
 	H: clear loss graph
 	R: reset view
 	Shift + R: reset all elements
