@@ -2463,16 +2463,25 @@ void	meanvar(double *arr, int count, int stride, double *ret_mean, double *ret_v
 	double mean=0, var=0;
 	if(count>0)
 	{
-		int nvals=count;
+		int nvals=0;
 		count*=stride;
 		for(int k=0;k<count;k+=stride)
-			mean+=arr[k];
+		{
+			if(arr[k]==arr[k]&&fabs(arr[k])!=HUGE_VALD)
+			{
+				mean+=arr[k];
+				++nvals;
+			}
+		}
 		mean/=nvals;
 		var=0;
 		for(int k=0;k<count;k+=stride)
 		{
-			double val=arr[k]-mean;
-			var+=val*val;
+			if(arr[k]==arr[k]&&fabs(arr[k])!=HUGE_VALD)
+			{
+				double val=arr[k]-mean;
+				var+=val*val;
+			}
 		}
 		var/=nvals;
 	}
@@ -2606,7 +2615,7 @@ void	simulate(int user)//number of rays must be even, always double-sided
 		Photon *ph=(Photon*)array_at(&photons, kp);
 		array_clear(&ph->paths);
 		ARRAY_ALLOC(Path, ph->paths, 0, nrays, 0, free_path);
-		for(int kp2=0;kp2<(int)ph->paths->count;++kp2)//for each ray	path->count must be even
+		for(int kp2=0;kp2<(int)ph->paths->count;++kp2)//for each ray		center->outward			path->count must be even
 		{
 			Path *path=(Path*)array_at(&ph->paths, kp2);
 			ARRAY_ALLOC(Point, path->points, 0, 0, 2, 0);
@@ -2735,17 +2744,38 @@ void	simulate(int user)//number of rays must be even, always double-sided
 	for(int kp=0;kp<(int)photons->count;++kp)
 	{
 		Photon *ph=(Photon*)array_at(&photons, kp);
-		for(int kp2=0;kp2<(int)ph->paths->count;++kp2)//for each ray
+		for(int kp2=0;kp2<(int)ph->paths->count;++kp2)//for each ray (from the top ray to its bottom mirror-twin)
 		{
-			Path *path=(Path*)array_at(&ph->paths, kp2);
+			Path *path;
+			Point *line, *cross;
+			double dx;
+			int kp3;
+
+			kp3=(kp2<<1)-(ph->paths->count-1);//reverse the memento pattern
+			kp3^=-(kp3<0);
+			//if(kp3<0)
+			//	kp3=-1-kp3;
+
+			//kp3=kp2<<1;
+			//if(kp3>=(int)ph->paths->count)
+			//	kp3=(ph->paths->count<<1)-(kp3+1);
+
+			//kp3=kp2>>1;//X
+			//if(kp2&1)
+			//	kp3+=ph->paths->count>>1;
+
+			path=(Path*)array_at(&ph->paths, kp3);
 			if(!path->emerged)
 				continue;
-			Point *line=(Point*)array_at(&path->points, path->points->count-2);
+			line=(Point*)array_at(&path->points, path->points->count-2);
 
-			double dx=line[1].x-line[0].x;
+			dx=line[1].x-line[0].x;
+			cross=(Point*)ARRAY_APPEND(yintersections, 0, 1, 1, 0);
 			if(!dx||(dx<0)==(line[0].x<x_sensor))
+			{
+				cross->x=cross->y=(double)NAN;
 				continue;
-			Point *cross=(Point*)ARRAY_APPEND(yintersections, 0, 1, 1, 0);
+			}
 			intersect_lines(line, sensorPlane, cross);
 			++out_path_count;
 		}
@@ -3184,58 +3214,124 @@ void			render()
 				ycenter=real2screenY(y_focus, scale);
 			int rx=(int)(r_blur*Xr), ry=(int)(r_blur*Yr);
 			Ellipse(ghMemDC, xcenter-rx, ycenter-ry, xcenter+rx, ycenter+ry);//draw blur circle
+		}
 
-			if(yintersections&&yintersections->count)
+		//draw blur function as broken line
+#if 1
+		if(yintersections)
+		{
+			int x1, y1, x2, y2;
+			Point *p1;
+
+			p1=(Point*)array_at(&yintersections, 0);
+			if(p1->y==p1->y&&fabs(p1->y)!=HUGE_VALD)
+				x1=w/(yintersections->count+1), y1=(h>>1)+(int)(p1->y*scale->Yr);
+			else
+				x1=0x80000000, y1=0x80000000;
+			//GUIPrint(ghMemDC, w>>1, h>>1, "%lf, %d=%08X", p1->y, y1);//
+			for(int k=1;k<(int)yintersections->count;++k)
 			{
-				Point *p1=(Point*)array_at(&yintersections, 0);
-				double rmax=p1->y;
-				for(int k=2;k<(int)yintersections->count;k+=2)
+				p1=(Point*)array_at(&yintersections, k);
+				if(p1->y==p1->y&&fabs(p1->y)!=HUGE_VALD)
+					x2=w*(k+1)/(yintersections->count+1), y2=(h>>1)+(int)(p1->y*scale->Yr);
+				else
+					x2=0x80000000, y2=0x80000000;
+				//GUIPrint(ghMemDC, w>>1, (h>>1)+k*16, "%lf", p1->y);//
+				if(x1!=0x80000000&&x2!=0x80000000)
 				{
-					Point *p2=(Point*)array_at(&yintersections, k);
-					double r=fabs(p2->y);
-					if(rmax<r)
-						rmax=r;
-				}
-
-				double th1=0;
-				int x1, y1, x2, y2;
-
-				x1=real2screenX(x_sensor+p1->y, scale);
-				y1=real2screenY(y_focus, scale);
-				x2=0, y2=0;
-
-				MoveToEx(ghMemDC, x1-5, y1, 0), LineTo(ghMemDC, x1+5, y1);//mark the start of the polar curve
-				MoveToEx(ghMemDC, x1, y1-5, 0), LineTo(ghMemDC, x1, y1+5);
-				//Ellipse(ghMemDC, x1-5, y1-5, x1+5, y1+5);//X  gets confused with r_blur ellipse
-
-				for(int k=2;k<(int)yintersections->count;k+=2)//pairs of points: {x0, y0}, {x0', y0'}, {x2, y2}, {x2', y2'}
-				{
-					Point *p2=(Point*)array_at(&yintersections, k);
-					double th2=M_PI*(k>>1)/((yintersections->count>>1)-1);
-					int x2=real2screenX(x_sensor+p2->y*cos(th2), scale),
-						y2=real2screenY(y_focus+p2->y*sin(th2), scale);
 					MoveToEx(ghMemDC, x1, y1, 0);
 					LineTo(ghMemDC, x2, y2);
-					p1=p2, th1=th1, x1=x2, y1=y2;
 				}
-				
-				hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
-				p1=(Point*)array_at(&yintersections, 1);
-				x1=real2screenX(x_sensor+p1->y, scale);
-				y1=real2screenY(y_focus, scale);
-				for(int k=3;k<(int)yintersections->count;k+=2)//draw mirror-twin hitpoints for coma
-				{
-					Point *p2=(Point*)array_at(&yintersections, k);
-					double th2=-M_PI*(k>>1)/((yintersections->count>>1)-1);
-					int x2=real2screenX(x_sensor+p2->y*cos(th2), scale),
-						y2=real2screenY(y_focus+p2->y*sin(th2), scale);
-					MoveToEx(ghMemDC, x1, y1, 0);
-					LineTo(ghMemDC, x2, y2);
-					p1=p2, th1=th1, x1=x2, y1=y2;
-				}
-				hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+				x1=x2, y1=y2;
 			}
 		}
+#endif
+
+		//draw blur function as bar graph (useless)
+#if 0
+		if(yintersections)
+		{
+			int y1=h>>1;
+			for(int k=0;k<(int)yintersections->count;++k)
+			{
+				Point *p1=(Point*)array_at(&yintersections, k);
+				if(p1->y==p1->y&&fabs(p1->y)!=HUGE_VALD)
+				{
+					int x1=w*(k+1)/(yintersections->count+1),
+						y2=y1+(int)(p1->y*scale->Yr);
+					MoveToEx(ghMemDC, x1, y1, 0);
+					LineTo(ghMemDC, x1, y2);
+				}
+			}
+		}
+#endif
+
+		//draw blur function as polar graph (confusing)
+#if 0
+		if(yintersections&&yintersections->count)
+		{
+			Point *p1=(Point*)array_at(&yintersections, 0);
+		/*	double rmax=p1->y;
+			for(int k=2;k<(int)yintersections->count;k+=2)
+			{
+				Point *p2=(Point*)array_at(&yintersections, k);
+				double r=fabs(p2->y);
+				if(rmax<r)
+					rmax=r;
+			}//*/
+
+			int x1, y1;
+
+			x1=real2screenX(x_sensor+p1->y, scale);
+			y1=real2screenY(y_focus, scale);
+			for(int k=1;k<(int)yintersections->count;++k)
+			{
+				p1=(Point*)array_at(&yintersections, k);
+				double th2=2*M_PI*k/(yintersections->count-1);
+				int x2=real2screenX(x_sensor+p1->y*cos(th2), scale),
+					y2=real2screenY(y_focus+p1->y*sin(th2), scale);
+				if(y1!=0x80000000&&y2!=0x80000000)
+				{
+					MoveToEx(ghMemDC, x1, y1, 0);
+					LineTo(ghMemDC, x2, y2);
+				}
+				x1=x2, y1=y2;
+			}
+			
+		/*	x1=real2screenX(x_sensor+p1->y, scale);
+			y1=real2screenY(y_focus, scale);
+
+			MoveToEx(ghMemDC, x1-5, y1, 0), LineTo(ghMemDC, x1+5, y1);//mark the start of the polar curve
+			MoveToEx(ghMemDC, x1, y1-5, 0), LineTo(ghMemDC, x1, y1+5);
+			//Ellipse(ghMemDC, x1-5, y1-5, x1+5, y1+5);//X  gets confused with r_blur ellipse
+			for(int k=2;k<(int)yintersections->count;k+=2)//pairs of points: {x0, y0}, {x0', y0'}, {x2, y2}, {x2', y2'}
+			{
+				Point *p2=(Point*)array_at(&yintersections, k);
+				double th2=M_PI*(k>>1)/((yintersections->count>>1)-1);
+				int x2=real2screenX(x_sensor+p2->y*cos(th2), scale),
+					y2=real2screenY(y_focus+p2->y*sin(th2), scale);
+				MoveToEx(ghMemDC, x1, y1, 0);
+				LineTo(ghMemDC, x2, y2);
+				p1=p2, th1=th2, x1=x2, y1=y2;
+			}
+
+			hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);
+			p1=(Point*)array_at(&yintersections, 1);
+			x1=real2screenX(x_sensor+p1->y, scale);
+			y1=real2screenY(y_focus, scale);
+			for(int k=3;k<(int)yintersections->count;k+=2)//draw mirror-twin hitpoints for coma
+			{
+				Point *p2=(Point*)array_at(&yintersections, k);
+				double th2=-M_PI*(k>>1)/((yintersections->count>>1)-1);
+				int x2=real2screenX(x_sensor+p2->y*cos(th2), scale),
+					y2=real2screenY(y_focus+p2->y*sin(th2), scale);
+				MoveToEx(ghMemDC, x1, y1, 0);
+				LineTo(ghMemDC, x2, y2);
+				p1=p2, th1=th2, x1=x2, y1=y2;
+			}
+			hPenMirror=(HPEN)SelectObject(ghMemDC, hPenMirror);//*/
+		}
+#endif
 
 		{//draw sensor
 			int xs=real2screenX(x_sensor, scale), y1, y2;
