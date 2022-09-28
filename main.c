@@ -3218,14 +3218,27 @@ void			render()
 
 		//draw blur function as broken line
 #if 1
-		if(yintersections)
+		if(yintersections&&yintersections->count)
 		{
 			int x1, y1, x2, y2;
 			Point *p1;
+			double ys;
+
+			ys=scale->Yr*1e4;
+			if(ys<1e3)
+				ys=1e3;
+			if(ys>1e7)
+				ys=1e7;
+
+			//const double min_ys=1e5;
+			//if(scale->Yr<min_ys)
+			//	ys=min_ys;
+			//else
+			//	ys=scale->Yr;
 
 			p1=(Point*)array_at(&yintersections, 0);
 			if(p1->y==p1->y&&fabs(p1->y)!=HUGE_VALD)
-				x1=w/(yintersections->count+1), y1=(h>>1)+(int)(p1->y*scale->Yr);
+				x1=w/(yintersections->count+1), y1=(h>>1)+(int)((p1->y-y_focus)*ys);
 			else
 				x1=0x80000000, y1=0x80000000;
 			//GUIPrint(ghMemDC, w>>1, h>>1, "%lf, %d=%08X", p1->y, y1);//
@@ -3233,7 +3246,7 @@ void			render()
 			{
 				p1=(Point*)array_at(&yintersections, k);
 				if(p1->y==p1->y&&fabs(p1->y)!=HUGE_VALD)
-					x2=w*(k+1)/(yintersections->count+1), y2=(h>>1)+(int)(p1->y*scale->Yr);
+					x2=w*(k+1)/(yintersections->count+1), y2=(h>>1)+(int)((p1->y-y_focus)*ys);
 				else
 					x2=0x80000000, y2=0x80000000;
 				//GUIPrint(ghMemDC, w>>1, (h>>1)+k*16, "%lf", p1->y);//
