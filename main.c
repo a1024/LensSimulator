@@ -586,11 +586,12 @@ int				nrays=10,
 				no_focus=0,
 				no_system=0;
 double			tan_tilt=0,//rays tilt
-				x_sensor=0,//x-coordinate of best sensor position
-				y_focus=0,
-				r_blur=0;//main loss value
+				x_sensor=0,//x-coordinate of best sensor position (mean of mirror-twin-ray x-intersections)
+				y_focus=0,//mean of y-intersections
+				r_blur=0;//std.dev of y-intersections (main loss value)
 int				track_focus=0;
 double			saved_VX=0, saved_VY=0;
+ArrayHandle		yintersections=0;//points of mirror-twin-rays' hits on the vertical sensor
 
 double			*history=0;
 int				hist_idx=0;
@@ -2507,8 +2508,6 @@ void	get_params(OpticComp const *e1, AreaIdx const *aidx, double lambda, Surface
 }
 void	simulate(int user)//number of rays must be even, always double-sided
 {
-	ArrayHandle intersections;
-
 	if(!elements||!elements->count)
 	{
 		no_system=1;
@@ -2657,13 +2656,15 @@ void	simulate(int user)//number of rays must be even, always double-sided
 		}
 	}
 
-
-	ARRAY_ALLOC(Point, intersections, 0, 0, 0, 0);
+	if(!yintersections)
+		ARRAY_ALLOC(Point, yintersections, 0, 0, 0, 0);
+	else
+		array_clear(&yintersections);
 	
 	no_focus=0;
 	if(tan_tilt==0)//update sensor position
 	{
-		//calculate intersections of emergent ray pairs
+		//calculate x-intersections of emergent ray pairs
 		for(int kp=0;kp<(int)photons->count;++kp)
 		{
 			Photon *ph=(Photon*)array_at(&photons, kp);
@@ -2683,18 +2684,18 @@ void	simulate(int user)//number of rays must be even, always double-sided
 					dy2=fabs(line1[1].y-line2[1].y);
 				if(dy1<dy2)//skip if divergent
 					continue;
-				Point *cross=(Point*)ARRAY_APPEND(intersections, 0, 1, 1, 0);
+				Point *cross=(Point*)ARRAY_APPEND(yintersections, 0, 1, 1, 0);
 				intersect_lines(line1, line2, cross);
 			}
 		}
 
-		if(!intersections->count)
+		if(!yintersections->count)
 			x_sensor=100, no_focus=1;
 		else
 		{
-			//calculate mean & standard deviation of symmetric intersections
-			meanvar((double*)intersections->data, (int)intersections->count, 2, &x_sensor, 0);
-			array_clear(&intersections);
+			//calculate mean & standard deviation of symmetric x-intersections
+			meanvar((double*)yintersections->data, (int)yintersections->count, 2, &x_sensor, 0);
+			array_clear(&yintersections);
 		}
 	}
 
@@ -2720,7 +2721,7 @@ void	simulate(int user)//number of rays must be even, always double-sided
 		}
 	}
 	
-	//calculate intersections of emergent rays with sensor
+	//calculate y-intersections of emergent rays with sensor
 	Point sensorPlane[2]=
 	{
 		{x_sensor, -10},
@@ -2741,12 +2742,12 @@ void	simulate(int user)//number of rays must be even, always double-sided
 			double dx=line[1].x-line[0].x;
 			if(!dx||(dx<0)==(line[0].x<x_sensor))
 				continue;
-			Point *cross=(Point*)ARRAY_APPEND(intersections, 0, 1, 1, 0);
+			Point *cross=(Point*)ARRAY_APPEND(yintersections, 0, 1, 1, 0);
 			intersect_lines(line, sensorPlane, cross);
 			++out_path_count;
 		}
 	}
-	meanvar((double*)intersections->data+1, (int)intersections->count, 2, &y_focus, &r_blur);
+	meanvar((double*)yintersections->data+1, (int)yintersections->count, 2, &y_focus, &r_blur);
 	r_blur=sqrt(r_blur);
 
 	if(!no_focus&&user)//update h i s t o r y
@@ -2754,10 +2755,6 @@ void	simulate(int user)//number of rays must be even, always double-sided
 		history[hist_idx]=r_blur;
 		++hist_idx, hist_idx%=w;
 	}
-
-	//cleanup
-	array_free(&intersections);
-
 	if(track_focus)
 		VX=x_sensor, VY=y_focus;
 }
@@ -3183,7 +3180,34 @@ void			render()
 			int xcenter=real2screenX(x_sensor, scale),
 				ycenter=real2screenY(y_focus, scale);
 			int rx=(int)(r_blur*Xr), ry=(int)(r_blur*Yr);
-			Ellipse(ghMemDC, xcenter-rx, ycenter-ry, xcenter+rx, ycenter+ry);//combined blur circle
+			Ellipse(ghMemDC, xcenter-rx, ycenter-ry, xcenter+rx, ycenter+ry);//draw blur circle
+
+			if(yintersections&&yintersections->count)
+			{
+				Point *p1=(Point*)array_at(&yintersections, 0);
+				double rmax=p1->y;
+				for(int k=2;k<yintersections->count;k+=2)
+				{
+					Point *p2=(Point*)array_at(&yintersections, k);
+					double r=fabs(p2->y);
+					if(rmax<r)
+						rmax=r;
+				}
+				double th1=0;
+				int x1=real2screenX(x_sensor+p1->y, scale),
+					y1=real2screenY(y_focus, scale),
+					x2=0, y2=0;
+				for(int k=2;k<yintersections->count;k+=2)//pairs of points: {x0, y0}, {x0', y0'}, {x2, y2}, {x2', y2'}
+				{
+					Point *p2=(Point*)array_at(&yintersections, k);
+					double th2=M_PI*(k>>1)/((yintersections->count>>1)-1);
+					int x2=real2screenX(x_sensor+p2->y*cos(th2), scale),
+						y2=real2screenY(y_focus+p2->y*sin(th2), scale);
+					MoveToEx(ghMemDC, x1, y1, 0);
+					LineTo(ghMemDC, x2, y2);
+					p1=p2, th1=th1, x1=x2, y1=y2;
+				}
+			}
 		}
 
 		{//draw sensor
@@ -3842,9 +3866,10 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 			int mw_forward=((short*)&wParam)[1]>0;
 			if(keyboard[VK_CONTROL])//change nrays
 			{
-				nrays+=mw_forward-!mw_forward;
-				if(nrays<1)
-					nrays=1;
+				nrays+=(mw_forward-!mw_forward)<<1;
+				nrays&=~1;
+				if(nrays<2)
+					nrays=2;
 				simulate(1);
 			}
 			else if(keyboard['X'])//scale x-axis
