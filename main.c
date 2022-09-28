@@ -1365,7 +1365,7 @@ int				parse_comp(const char *filename, ArrayHandle text, int *idx, int *lineno,
 		}
 	}//end of 2nd loop
 	if(e1->nBounds>1)
-		negate(&e1->info[e1->nBounds-1].radius);//flip right radius
+		negate(&e1->info[e1->nBounds-1].radius);//negate rightmost radius, if thare are several boundaries
 	if(fieldmask&8)//if aperture was declared, it overrides boundary apertures
 	{
 		ap*=0.5;
@@ -1670,8 +1670,7 @@ int				parse_elem(const char *filename, ArrayHandle text, int *idx, int *lineno,
 	}//end of 2nd loop
 	e1->nBounds=2;
 	e1->info[1].pos+=e1->info[0].pos;//add left position to thickness
-	//if(e1->info[1].radius)
-		e1->info[1].radius=-e1->info[1].radius;//flip right radius
+	negate(&e1->info[1].radius);//negate rightmost radius from file
 	if(fieldmask&8)//if aperture was declared, it overrides left & right declarations
 	{
 		ap*=0.5;
