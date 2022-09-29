@@ -605,7 +605,7 @@ int				track_focus=0;
 double			saved_VX=0, saved_VY=0;
 ArrayHandle		yintersections=0;//points of mirror-twin-rays' hits on the vertical sensor
 
-int				bkw=256, bkh=256;
+int				bkw=320, bkh=320;
 ArrayHandle		blur_kernels=0;
 int				blur_argmax[2]={0};
 double			pixel_pitch=0.000389;
@@ -2619,6 +2619,11 @@ void	stamp_black(int px, int py, int bw, int bh)
 }
 void	stamp_blur_kernel(int px, int py, BlurKernel *kernel, int bw, int bh, double gain_r, double gain_g, double gain_b)
 {
+	double gain=1/sqrt(sqrt(kernel->energy));
+	gain_r*=gain;
+	gain_g*=gain;
+	gain_b*=gain;
+
 	//unsigned char *pc=(unsigned char*)&color;
 	//double
 	//	den=1/sqrt(sqrt(kernel->energy)),
@@ -4315,7 +4320,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 #endif
 				"\n"
 				"B left/right:\tAdjust focus\n"
-				"K:\t\tShow blur kernel\n"
+				"K:\t\tToggle live blur preview\n"
 				"\n"
 				"Shift R:\tReset all parameters\n"
 			//	"1~6 R: Reset corresponding property of current glass element\n"
