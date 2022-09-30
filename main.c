@@ -26,6 +26,10 @@
 #include<io.h>//for console
 #include<fcntl.h>
 
+#define STBI_WINDOWS_UTF8
+#define STB_IMAGE_IMPLEMENTATION
+#include"stb_image.h"
+
 //	#define		ENABLE_OPTIMIZER
 
 #define			SIZEOF(ST_ARR)	(sizeof(ST_ARR)/sizeof(*(ST_ARR)))
@@ -175,6 +179,16 @@ void 			memswap(void *p1, void *p2, size_t size, void *temp)
 void			negate(double *x){*x=-*x;}
 double			maximum(double a, double b){return a<b?b:a;}
 double			minimum(double a, double b){return a<b?a:b;}
+int				floor_log2(unsigned long long n)//idx of MSB
+{
+	int sh=(n>=1ULL	<<32)<<5,	logn =sh; n>>=sh;
+		sh=(n>=1	<<16)<<4;	logn+=sh, n>>=sh;
+		sh=(n>=1	<< 8)<<3;	logn+=sh, n>>=sh;
+		sh=(n>=1	<< 4)<<2;	logn+=sh, n>>=sh;
+		sh=(n>=1	<< 2)<<1;	logn+=sh, n>>=sh;
+		sh= n>=1	<< 1;		logn+=sh;
+	return logn;
+}
 
 char			error_msg[G_BUF_SIZE]={0};
 int				runtime_error(const char *file, int line, const char *format, ...)
@@ -261,11 +275,8 @@ void*			array_insert(ArrayHandle *arr, size_t idx, const void *data, size_t coun
 void*			array_erase(ArrayHandle *arr, size_t idx, size_t count);
 void*			array_replace(ArrayHandle *arr, size_t idx, size_t rem_count, const void *data, size_t ins_count, size_t rep, size_t pad);
 
-size_t			array_size(ArrayHandle const *arr);
 void*			array_at(ArrayHandle *arr, size_t idx);
-const void*		array_at_const(ArrayConstHandle *arr, int idx);
 void*			array_back(ArrayHandle *arr);
-const void*		array_back_const(ArrayHandle const *arr);
 
 #define			ARRAY_ALLOC(ELEM_TYPE, ARR, DATA, COUNT, PAD, DESTRUCTOR)	ARR=array_construct(DATA, sizeof(ELEM_TYPE), COUNT, 1, PAD, DESTRUCTOR)
 #define			ARRAY_APPEND(ARR, DATA, COUNT, REP, PAD)					array_insert(&(ARR), (ARR)->count, DATA, COUNT, REP, PAD)
@@ -462,12 +473,6 @@ void*			array_replace(ArrayHandle *arr, size_t idx, size_t rem_count, const void
 	return arr[0]->data+start;//return start of inserted range
 }
 
-size_t			array_size(ArrayHandle const *arr)//can be nullptr
-{
-	if(!arr[0])
-		return 0;
-	return arr[0]->count;
-}
 void*			array_at(ArrayHandle *arr, size_t idx)
 {
 	if(!arr[0])
@@ -476,19 +481,7 @@ void*			array_at(ArrayHandle *arr, size_t idx)
 		return 0;
 	return arr[0]->data+idx*arr[0]->esize;
 }
-const void*		array_at_const(ArrayConstHandle *arr, int idx)
-{
-	if(!arr[0])
-		return 0;
-	return arr[0]->data+idx*arr[0]->esize;
-}
 void*			array_back(ArrayHandle *arr)
-{
-	if(!*arr||!arr[0]->count)
-		return 0;
-	return arr[0]->data+(arr[0]->count-1)*arr[0]->esize;
-}
-const void*		array_back_const(ArrayHandle const *arr)
 {
 	if(!*arr||!arr[0]->count)
 		return 0;
@@ -583,6 +576,11 @@ void			free_blurkernel(void *p)
 	free(kernel->data);
 }
 
+typedef struct ImageStruct
+{
+	int w, h, *data;
+} Image;
+
 
 //globals
 int				current_elem=0;
@@ -605,10 +603,13 @@ int				track_focus=0;
 double			saved_VX=0, saved_VY=0;
 ArrayHandle		yintersections=0;//points of mirror-twin-rays' hits on the vertical sensor
 
-int				bkw=320, bkh=320;
+int				bkw=256, bkh=256;
 ArrayHandle		blur_kernels=0;
 int				blur_argmax[2]={0};
 double			pixel_pitch=0.000389;
+
+Image			image={0};
+ArrayHandle		blurred_image=0;
 
 double			*history=0;
 int				hist_idx=0;
@@ -761,6 +762,417 @@ double			lambda2n(double n_base, double lambda)
 }
 #endif
 
+
+void			render_blur_kernel(BlurKernel *kernel, int bw, int bh, Point const *hitpoints, int count, double ycenter, double pixel_size_cm)
+{
+	//double energy;
+	int npairs=count>>1, size=bw*bh;
+	memset(kernel->data, 0, size*sizeof(double));
+	for(int kp=0;kp<npairs;++kp)
+	{
+		Point const *p1=hitpoints+kp, *p2=hitpoints+count-1-kp;
+		double ya=p1->y, yc=p2->y;
+		if(ya==ya&&fabs(ya)!=HUGE_VALD&&yc==yc&&fabs(yc)!=HUGE_VALD)
+		{
+			if(ya<ycenter&&ycenter<yc||yc<ycenter&&ycenter<ya)
+			{
+				double cy=(ya+yc)*0.5-ycenter, rx=fabs(yc-ya)*0.5, c=rx-minimum(fabs(ycenter-ya), fabs(yc-ycenter)), ry=sqrt(rx*rx-c*c);
+				//Ellipse equation: sq(x/rx) + sq((y-cy)/ry) = 1
+				for(int ky=0;ky<bh;++ky)
+				{
+					double y=(ky-bh*0.5)*pixel_size_cm;
+					for(int kx=0;kx<bw;++kx)
+					{
+						double x=(kx-bw*0.5)*pixel_size_cm;
+						double t1=x/rx, t2=(y-cy)/ry;//exp(-sq(sq(x/rx)+sq((y-cy)/ry)-1))
+						t1*=t1, t2*=t2;
+						t1+=t2-1;
+						t1*=t1;
+						t1=exp(-t1);
+						kernel->data[bw*ky+kx]+=t1;
+					}
+				}
+			}
+			else
+			{
+				double cy=(ya+yc)*0.5-ycenter, r=fabs(yc-ya)*0.5, r2=1/(r*r);
+				//Circle equation: sq(x) + sq(y-cy) = r2
+				for(int ky=0;ky<bh;++ky)
+				{
+					double y=(ky-bh*0.5)*pixel_size_cm;
+					for(int kx=0;kx<bw;++kx)
+					{
+						double x=(kx-bw*0.5)*pixel_size_cm;
+						double t1=x*x*r2, t2=y-cy;//exp(-sq(sq(x)/r2+sq(y-cy)/r2-1))
+						t2*=t2;
+						t2*=r2;
+						t1+=t2-1;
+						t1*=t1;
+						t1=exp(-t1);
+						kernel->data[bw*ky+kx]+=t1;
+					}
+				}
+			}
+		}
+	}
+	kernel->energy=0;
+	for(int k=0;k<size;++k)
+		kernel->energy+=kernel->data[k];
+	//argmax[0]=argmax[1]=0;
+	//energy=0;
+	//for(int ky=0;ky<bh;++ky)
+	//{
+	//	for(int kx=0;kx<bw;++kx)
+	//	{
+	//		double *vmax=kernel+bw*argmax[1]+argmax[0], *v=kernel+bw*ky+kx;
+	//		if(*vmax<*v)
+	//		{
+	//			argmax[0]=kx;
+	//			argmax[1]=ky;
+	//		}
+	//		energy+=*v;
+	//	}
+	//}
+	//convert kernel to PDF by dividing by the integral
+	//double gain=1/energy;
+	//for(int k=0;k<size;++k)
+	//	kernel[k]*=gain;
+	//return energy;
+}
+void			render_kernels()
+{
+	if(blur_kernels&&blur_kernels->count==photons->count)
+	{
+		int nraysperphoton=yintersections->count/photons->count;
+		Point const *hitpoints=(Point*)yintersections->data;
+		for(int kp=0;kp<(int)photons->count;++kp)
+		{
+			BlurKernel *kernel=(BlurKernel*)array_at(&blur_kernels, kp);
+			render_blur_kernel(kernel, bkw, bkh, hitpoints+kp*nraysperphoton, nraysperphoton, y_focus, pixel_pitch);
+		}
+	}
+}
+
+void			stamp_black(int *dst, int dw, int dh, int px, int py, int bw, int bh, int shift)
+{
+	if(shift>=0&&shift<8)
+	{
+		for(int ky=0;ky<bh;++ky)
+		{
+			int ky2=py+ky;
+			if(ky2>=0&&ky2<dh)
+			{
+				for(int kx=0;kx<bw;++kx)
+				{
+					int kx2=px+kx;
+					if(kx2>=0&&kx2<dw)
+					{
+						unsigned char *pc=(unsigned char*)(dst+dw*(py+ky)+px+kx);
+						pc[0]>>=shift;
+						pc[1]>>=shift;
+						pc[2]>>=shift;
+					}
+				}
+			}
+		}
+	}
+	else
+	{
+		for(int ky=0;ky<bh;++ky)
+		{
+			int ky2=py+ky;
+			if(ky2>=0&&ky2<dh)
+			{
+				for(int kx=0;kx<bw;++kx)
+				{
+					int kx2=px+kx;
+					if(kx2>=0&&kx2<dw)
+					{
+						unsigned char *pc=(unsigned char*)(dst+dw*(py+ky)+px+kx);
+						pc[0]=0;
+						pc[1]=0;
+						pc[2]=0;
+					}
+				}
+			}
+		}
+	}
+}
+void			stamp_blur_kernel(int *dst, int dw, int dh, int px, int py, BlurKernel *kernel, int bw, int bh, double gain_r, double gain_g, double gain_b)
+{
+	double gain=1/sqrt(sqrt(kernel->energy));
+	gain_r*=gain;
+	gain_g*=gain;
+	gain_b*=gain;
+
+	//unsigned char *pc=(unsigned char*)&color;
+	//double
+	//	den=1/sqrt(sqrt(kernel->energy)),
+	//	gain_b=pc[0]*den,
+	//	gain_g=pc[1]*den,
+	//	gain_r=pc[2]*den;
+	//if(gain_r>255)
+	//	gain_r=255;
+	//if(gain_g>255)
+	//	gain_g=255;
+	//if(gain_b>255)
+	//	gain_b=255;
+	for(int ky=0;ky<bh;++ky)
+	{
+		int ky2=py+ky;
+		if(ky2>=0&&ky2<dh)
+		{
+			for(int kx=0;kx<bw;++kx)
+			{
+				int kx2=px+kx;
+				if(kx2>=0&&kx2<dw)
+				{
+					double lum=kernel->data[bw*ky+kx], r, g, b;
+					unsigned char *pc=(unsigned char*)(dst+dw*(py+ky)+px+kx);
+					r=pc[0]+gain_b*lum;
+					g=pc[1]+gain_g*lum;
+					b=pc[2]+gain_r*lum;
+					if(r>255)
+						r=255;
+					if(g>255)
+						g=255;
+					if(b>255)
+						b=255;
+					pc[0]=(unsigned char)r;
+					pc[1]=(unsigned char)g;
+					pc[2]=(unsigned char)b;
+				}
+			}
+		}
+	}
+/*	double gain=kernel[bw*argmax[1]+argmax[0]];
+	gain=255/gain;
+	for(int ky=0;ky<bh;++ky)
+	{
+		int ky2=py+ky;
+		if(ky2>=0&&ky2<dh)
+		{
+			for(int kx=0;kx<bw;++kx)
+			{
+				int kx2=px+kx;
+				if(kx2>=0&&kx2<dw)
+				{
+					unsigned char level=(unsigned char)(kernel[bw*ky+kx]*gain);
+					dst[dw*(py+ky)+px+kx]=level<<16|level<<8|level;
+				}
+			}
+		}
+	}//*/
+}
+void			raster_kernels(int *dst, int dw, int dh, int px, int py, int tr_shift)//tr_shift: 0~8, 0: completely transparent, 8: completely opaque black background
+{
+	double r, g, b, gain;
+
+	r=g=b=0;
+	for(int kp=0;kp<(int)blur_kernels->count;++kp)
+	{
+		Photon *ph=(Photon*)array_at(&photons, kp);
+		unsigned char *pc=(unsigned char*)&ph->color;
+		r+=pc[0];
+		g+=pc[1];
+		b+=pc[2];
+	}
+	if(r<g)
+		gain=g;
+	else
+		gain=r;
+	if(gain<b)
+		gain=b;
+	gain=255/gain;
+	stamp_black(dst, dw, dh, px, py, bkw, bkh, tr_shift);
+	for(int kp=0;kp<(int)blur_kernels->count;++kp)
+	{
+		BlurKernel *kernel=(BlurKernel*)array_at(&blur_kernels, kp);
+		Photon *ph=(Photon*)array_at(&photons, kp);
+		unsigned char *pc=(unsigned char*)&ph->color;
+		stamp_blur_kernel(dst, dw, dh, px, py, kernel, bkw, bkh, pc[0]*gain, pc[1]*gain, pc[2]*gain);
+	}
+}
+
+int				open_image(Image *image)
+{
+	wchar_t szFile[MAX_PATH]={'\0'};
+	OPENFILENAMEW ofn={sizeof(ofn), ghWnd, 0, L"All files(*.*)\0*.*\0", 0, 0, 1, szFile, sizeof(szFile), 0, 0, 0, 0, OFN_PATHMUSTEXIST|OFN_FILEMUSTEXIST, 0, 0, 0, 0, 0, 0};
+	if(GetOpenFileNameW(&ofn))
+	{
+		int nch=0;
+		stbi_convert_wchar_to_utf8(g_buf, G_BUF_SIZE, ofn.lpstrFile);
+		image->data=(int*)stbi_load(g_buf, &image->w, &image->h, &nch, 4);
+		if(!image->data)
+		{
+			LOG_ERROR("Cannot open \'%s\'.\nOnly legacy formats (uncompressed BMP / PNG / JPG / still GIF) are supported.", ofn.lpstrFile);
+			return 0;
+		}
+		return 1;
+	}
+	return 0;
+}
+
+//tinyFFT
+typedef struct CompStruct
+{
+	float r, i;
+} Comp;
+#define			COMP_MUL_EXCL(DST, A, B)		(DST)->r=(A)->r*(B)->r-(A)->i*(B)->i, (DST)->i=(A)->r*(B)->i+(A)->i*(B)->r
+void			apply_FFT_1D(Comp *data, int lg_count, int stride, int **BRP, Comp *temp, int is_inv)
+{
+	int count=1<<lg_count;
+	double cycle=-2*M_PI;
+	if(is_inv)
+		cycle=-cycle;
+	if(!*BRP)
+	{
+		*BRP=(int*)malloc(count*sizeof(int));
+		for(int k=0;k<count;++k)
+		{
+			int val=0;
+			for(int k2=0;k2<lg_count;++k2)
+				val|=(k>>k2&1)<<(lg_count-1-k2);
+			BRP[0][k]=val;
+		}
+	}
+	for(int k=0;k<count;++k)
+	{
+		int ks=k*stride, kd=BRP[0][k];
+		temp[kd]=data[ks];
+	}
+	for(int it=1;it<=lg_count;++it)
+	{
+		int m=1<<it, m_2=m>>1;
+		double angle=cycle/m;
+		Comp wm={cosf(angle), sinf(angle)};
+		for(int kb=0;kb<count;kb+=m)
+		{
+			Comp w={1, 0};
+			for(int kop=0;kop<m_2;++kop)
+			{
+				Comp
+					*d0=temp+kb+kop, *d1=temp+kb+kop+m_2,
+					a=*d0, b;
+				COMP_MUL_EXCL(&b, &w, d1);
+				//comp_mul(&b, &w, d1);
+				d0->r=a.r+b.r;
+				d0->i=a.i+b.i;
+				d1->r=a.r-b.r;
+				d1->i=a.i-b.i;
+				COMP_MUL_EXCL(&b, &w, &wm);
+				w=b;
+			}
+		}
+	}
+	for(int ks=0, kd=0;ks<count;++ks, kd+=stride)
+		data[kd]=temp[ks];
+}
+void			apply_FFT_2D(Comp *image, int lg_w, int lg_h, int is_inv)
+{
+	int iw=1<<lg_w, ih=1<<lg_h, maxdim=iw>ih?iw:ih, *BRP;
+	Comp *temp=(Comp*)malloc(maxdim*sizeof(Comp));
+
+	if(!is_inv)
+	{
+		BRP=0;
+		for(int ky=0;ky<ih;++ky)
+			apply_FFT_1D(image+iw*ky, lg_w, 1, &BRP, temp, is_inv);
+		free(BRP);
+	}
+	
+	BRP=0;
+	for(int kx=0;kx<iw;++kx)
+		apply_FFT_1D(image+kx, lg_h, iw, &BRP, temp, is_inv);
+	free(BRP);
+
+	if(is_inv)
+	{
+		BRP=0;
+		for(int ky=0;ky<ih;++ky)
+			apply_FFT_1D(image+iw*ky, lg_w, 1, &BRP, temp, is_inv);
+		free(BRP);
+	}
+
+	free(temp);
+}
+void			blur_image()
+{
+	int size=bkw*bkh, lg_w=floor_log2(bkw), lg_h=floor_log2(bkh);
+	Comp *A, *B;
+	if(!blurred_image)
+		ARRAY_ALLOC(int, blurred_image, 0, size, 0, 0);
+	else if(blurred_image->count!=size)
+		array_realloc(&blurred_image, size, 0);
+	memset(blurred_image->data, 0, size*sizeof(int));
+
+	A=(Comp*)malloc(size*sizeof(Comp));
+	B=(Comp*)malloc(size*sizeof(Comp));
+	for(int kc=0;kc<3&&kc<blur_kernels->count;++kc)
+	{
+		BlurKernel *kernel=(BlurKernel*)array_at(&blur_kernels, kc&-(blur_kernels->count>=3));//FIXME reusing first kernel/photon if less than 3
+
+		memset(A, 0, size*sizeof(Comp));
+		memset(B, 0, size*sizeof(Comp));
+
+		for(int ky=0;ky<bkh;++ky)
+		{
+			int ky2=ky;
+			ky2-=(bkh-image.h)>>1&-(image.h<bkh);
+			if(ky2>=0&&ky2<image.h)
+			{
+				for(int kx=0;kx<bkw;++kx)
+				{
+					int kx2=kx;
+					kx2-=(bkw-image.w)>>1&-(image.w<bkw);
+					if(kx2>=0&&kx2<image.h)
+					{
+						unsigned char *pc=(unsigned char*)(image.data+image.w*ky2+kx2);
+						A[bkw*ky+kx].r=pc[kc];
+					}
+				}
+			}
+		}
+
+		double gain=1/(size*sqrt(kernel->energy));//pre-divide by the size of the DFT, also a fake 'sqrt' energy boost
+		for(int ky=0;ky<bkh;++ky)
+		{
+			int ky2=ky+(bkh>>1);//kernel center should be at corners
+			ky2-=bkh&-(ky2>=bkh);
+			for(int kx=0;kx<bkw;++kx)
+			{
+				int kx2=kx+(bkw>>1);
+				kx2-=bkw&-(kx2>=bkw);
+				B[bkw*ky+kx].r=kernel->data[bkw*ky2+kx2]*gain;
+			}
+		}
+
+		apply_FFT_2D(A, lg_w, lg_h, 0);
+		apply_FFT_2D(B, lg_w, lg_h, 0);
+
+		for(int kp=0;kp<size;++kp)
+		{
+			Comp temp;
+			COMP_MUL_EXCL(&temp, A+kp, B+kp);
+			A[kp]=temp;
+		}
+			
+		apply_FFT_2D(A, lg_w, lg_h, 1);
+			
+		for(int kp=0;kp<size;++kp)
+		{
+			unsigned char *pc=(unsigned char*)array_at(&blurred_image, kp);
+			double r=A[kp].r;
+			if(r<0)
+				r=0;
+			if(r>255)
+				r=255;
+			pc[kc]=(unsigned char)r;
+		}
+	}
+	free(A);
+	free(B);
+}
 
 void			free_elements(ArrayHandle *arr)
 {
@@ -1030,12 +1442,6 @@ int				parse_number(const char *filename, ArrayHandle text, int *idx, int *linen
 		*ret_val=sign*val;
 	return success;
 }
-//int			parse_boundary(const char *filename, ArrayHandle text, int *idx, int *lineno, int *linestart, OpticComp *e1)
-//{
-//}
-//int			parse_medium(const char *filename, ArrayHandle text, int *idx, int *lineno, int *linestart, OpticComp *e1)
-//{
-//}
 int				parse_comp(const char *filename, ArrayHandle text, int *idx, int *lineno, int *linestart, OpticComp *e1)
 {
 	int fieldmask=0;//{right, left,  ap, th, pos, n}
@@ -2113,20 +2519,6 @@ void			print2str(ArrayHandle *str, const char *format, ...)
 	va_end(args);
 	STR_APPEND(*str, g_buf, printed, 1);
 }
-#if 0
-void			print2str_surface(ArrayHandle *str, Boundary *s, int bound_idx)
-{
-	const char *name;
-	double radius;
-	const char *stypes[]={"hole", "transp", "mirror"};
-
-	if(bound_idx)
-		name="right", radius=-s->radius;
-	else
-		name="left", radius=s->radius;
-	print2str(str, "\t%s\t=%gcm: %s, %gcm, %s, %gcm;\n", name, radius, stypes[s->type[0]-1], s->r_max[0], stypes[s->type[1]-1], s->r_max[1]);
-}
-#endif
 void			print2str_aidx(ArrayHandle *str, AreaIdx *aidx)
 {
 	OpticComp *oe=(OpticComp*)array_at(&elements, aidx->e_idx);
@@ -2506,183 +2898,6 @@ void	meanvar(double *arr, int count, int stride, double *ret_mean, double *ret_v
 		*ret_var=var;
 }
 
-void	render_blur_kernel(BlurKernel *kernel, int bw, int bh, Point const *hitpoints, int count, double ycenter, double pixel_size_cm)
-{
-	//double energy;
-	int npairs=count>>1, size=bw*bh;
-	memset(kernel->data, 0, size*sizeof(double));
-	for(int kp=0;kp<npairs;++kp)
-	{
-		Point const *p1=hitpoints+kp, *p2=hitpoints+count-1-kp;
-		double ya=p1->y, yc=p2->y;
-		if(ya==ya&&fabs(ya)!=HUGE_VALD&&yc==yc&&fabs(yc)!=HUGE_VALD)
-		{
-			if(ya<ycenter&&ycenter<yc||yc<ycenter&&ycenter<ya)
-			{
-				double cy=(ya+yc)*0.5-ycenter, rx=fabs(yc-ya)*0.5, c=rx-minimum(fabs(ycenter-ya), fabs(yc-ycenter)), ry=sqrt(rx*rx-c*c);
-				//Ellipse equation: sq(x/rx) + sq((y-cy)/ry) = 1
-				for(int ky=0;ky<bh;++ky)
-				{
-					double y=(ky-bh*0.5)*pixel_size_cm;
-					for(int kx=0;kx<bw;++kx)
-					{
-						double x=(kx-bw*0.5)*pixel_size_cm;
-						double t1=x/rx, t2=(y-cy)/ry;//exp(-sq(sq(x/rx)+sq((y-cy)/ry)-1))
-						t1*=t1, t2*=t2;
-						t1+=t2-1;
-						t1*=t1;
-						t1=exp(-t1);
-						kernel->data[bw*ky+kx]+=t1;
-					}
-				}
-			}
-			else
-			{
-				double cy=(ya+yc)*0.5-ycenter, r=fabs(yc-ya)*0.5, r2=1/(r*r);
-				//Circle equation: sq(x) + sq(y-cy) = r2
-				for(int ky=0;ky<bh;++ky)
-				{
-					double y=(ky-bh*0.5)*pixel_size_cm;
-					for(int kx=0;kx<bw;++kx)
-					{
-						double x=(kx-bw*0.5)*pixel_size_cm;
-						double t1=x*x*r2, t2=y-cy;//exp(-sq(sq(x)/r2+sq(y-cy)/r2-1))
-						t2*=t2;
-						t2*=r2;
-						t1+=t2-1;
-						t1*=t1;
-						t1=exp(-t1);
-						kernel->data[bw*ky+kx]+=t1;
-					}
-				}
-			}
-		}
-	}
-	kernel->energy=0;
-	for(int k=0;k<size;++k)
-		kernel->energy+=kernel->data[k];
-	//argmax[0]=argmax[1]=0;
-	//energy=0;
-	//for(int ky=0;ky<bh;++ky)
-	//{
-	//	for(int kx=0;kx<bw;++kx)
-	//	{
-	//		double *vmax=kernel+bw*argmax[1]+argmax[0], *v=kernel+bw*ky+kx;
-	//		if(*vmax<*v)
-	//		{
-	//			argmax[0]=kx;
-	//			argmax[1]=ky;
-	//		}
-	//		energy+=*v;
-	//	}
-	//}
-	//convert kernel to PDF by dividing by the integral
-	//double gain=1/energy;
-	//for(int k=0;k<size;++k)
-	//	kernel[k]*=gain;
-	//return energy;
-}
-void	render_kernels()
-{
-	if(blur_kernels&&blur_kernels->count==photons->count)
-	{
-		int nraysperphoton=yintersections->count/photons->count;
-		Point const *hitpoints=(Point*)yintersections->data;
-		for(int kp=0;kp<(int)photons->count;++kp)
-		{
-			BlurKernel *kernel=(BlurKernel*)array_at(&blur_kernels, kp);
-			render_blur_kernel(kernel, bkw, bkh, hitpoints+kp*nraysperphoton, nraysperphoton, y_focus, pixel_pitch);
-		}
-	}
-}
-void	stamp_black(int px, int py, int bw, int bh)
-{
-	for(int ky=0;ky<bh;++ky)
-	{
-		int ky2=py+ky;
-		if(ky2>=0&&ky2<h)
-		{
-			for(int kx=0;kx<bw;++kx)
-			{
-				int kx2=px+kx;
-				if(kx2>=0&&kx2<w)
-				{
-					unsigned char *pc=(unsigned char*)(rgb+w*(py+ky)+px+kx);
-					pc[0]>>=4;
-					pc[1]>>=4;
-					pc[2]>>=4;
-				//	rgb[w*(py+ky)+px+kx]=0;
-				}
-			}
-		}
-	}
-}
-void	stamp_blur_kernel(int px, int py, BlurKernel *kernel, int bw, int bh, double gain_r, double gain_g, double gain_b)
-{
-	double gain=1/sqrt(sqrt(kernel->energy));
-	gain_r*=gain;
-	gain_g*=gain;
-	gain_b*=gain;
-
-	//unsigned char *pc=(unsigned char*)&color;
-	//double
-	//	den=1/sqrt(sqrt(kernel->energy)),
-	//	gain_b=pc[0]*den,
-	//	gain_g=pc[1]*den,
-	//	gain_r=pc[2]*den;
-	//if(gain_r>255)
-	//	gain_r=255;
-	//if(gain_g>255)
-	//	gain_g=255;
-	//if(gain_b>255)
-	//	gain_b=255;
-	for(int ky=0;ky<bh;++ky)
-	{
-		int ky2=py+ky;
-		if(ky2>=0&&ky2<h)
-		{
-			for(int kx=0;kx<bw;++kx)
-			{
-				int kx2=px+kx;
-				if(kx2>=0&&kx2<w)
-				{
-					double lum=kernel->data[bw*ky+kx], r, g, b;
-					unsigned char *pc=(unsigned char*)(rgb+w*(py+ky)+px+kx);
-					r=pc[0]+gain_b*lum;
-					g=pc[1]+gain_g*lum;
-					b=pc[2]+gain_r*lum;
-					if(r>255)
-						r=255;
-					if(g>255)
-						g=255;
-					if(b>255)
-						b=255;
-					pc[0]=(unsigned char)r;
-					pc[1]=(unsigned char)g;
-					pc[2]=(unsigned char)b;
-				}
-			}
-		}
-	}
-/*	double gain=kernel[bw*argmax[1]+argmax[0]];
-	gain=255/gain;
-	for(int ky=0;ky<bh;++ky)
-	{
-		int ky2=py+ky;
-		if(ky2>=0&&ky2<h)
-		{
-			for(int kx=0;kx<bw;++kx)
-			{
-				int kx2=px+kx;
-				if(kx2>=0&&kx2<w)
-				{
-					unsigned char level=(unsigned char)(kernel[bw*ky+kx]*gain);
-					rgb[w*(py+ky)+px+kx]=level<<16|level<<8|level;
-				}
-			}
-		}
-	}//*/
-}
 
 typedef struct SurfaceParamsStruct
 {
@@ -2985,6 +3200,8 @@ void	simulate(int user)//number of rays must be even, always double-sided,		user
 		VX=x_sensor, VY=y_focus;
 
 	render_kernels();
+	if(image.data)
+		blur_image();
 }
 double	calc_loss()
 {
@@ -3333,11 +3550,11 @@ void			render()
 			Photon *lp=(Photon*)array_at(&photons, kn);
 			HPEN hPenRay=CreatePen(PS_SOLID, 1, lp->color);
 			hPenRay=(HPEN)SelectObject(ghMemDC, hPenRay);
-			for(int kp=0, npaths=array_size(&lp->paths);kp<npaths;++kp)
+			for(int kp=0, npaths=lp->paths->count;kp<npaths;++kp)
 			{
 				Path *p=(Path*)array_at(&lp->paths, kp);
 				Point *points=(Point*)array_at(&p->points, 0);
-				int npoints=array_size(&p->points);
+				int npoints=p->points->count;
 				draw_curve(points, npoints, scale);
 			}
 			hPenRay=(HPEN)SelectObject(ghMemDC, hPenRay);
@@ -3385,7 +3602,7 @@ void			render()
 		for(int kn=0;kn<(int)photons->count;++kn)				//draw blur circles
 		{
 			Photon *lp=(Photon*)array_at(&photons, kn);
-			int npaths=array_size(&lp->paths);
+			int npaths=lp->paths->count;
 			int xcenter=real2screenX(lp->em_centroid.x, scale),
 				ycenter=real2screenY(lp->em_centroid.y, scale);
 
@@ -3852,31 +4069,24 @@ void			render()
 
 		if(blur_kernels)
 		{
-			double r, g, b, gain;
-
-			r=g=b=0;
-			for(int kp=0;kp<(int)blur_kernels->count;++kp)
+			int px=w-bkw;
+			raster_kernels(rgb, w, h, px, 0, 4);
+			if(blurred_image)
 			{
-				Photon *ph=(Photon*)array_at(&photons, kp);
-				unsigned char *pc=(unsigned char*)&ph->color;
-				r+=pc[0];
-				g+=pc[1];
-				b+=pc[2];
-			}
-			if(r<g)
-				gain=g;
-			else
-				gain=r;
-			if(gain<b)
-				gain=b;
-			gain=255/gain;
-			stamp_black(w-bkw, 0, bkw, bkh);
-			for(int kp=0;kp<(int)blur_kernels->count;++kp)
-			{
-				BlurKernel *kernel=(BlurKernel*)array_at(&blur_kernels, kp);
-				Photon *ph=(Photon*)array_at(&photons, kp);
-				unsigned char *pc=(unsigned char*)&ph->color;
-				stamp_blur_kernel(w-bkw, 0, kernel, bkw, bkh, pc[0]*gain, pc[1]*gain, pc[2]*gain);
+				const int *data=(const int*)blurred_image->data;
+				px-=bkw;
+				for(int ky=0;ky<bkh;++ky)
+				{
+					if(ky<h)
+					{
+						for(int kx=0;kx<bkw;++kx)
+						{
+							int kx2=px+kx;
+							if(kx2>=0&&kx2<w)
+								rgb[w*ky+kx2]=data[bkw*ky+kx];
+						}
+					}
+				}
 			}
 		}
 	}
@@ -4321,6 +4531,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				"\n"
 				"B left/right:\tAdjust focus\n"
 				"K:\t\tToggle live blur preview\n"
+				"Ctrl K:\t\tSelect image to blur\n"
 				"\n"
 				"Shift R:\tReset all parameters\n"
 			//	"1~6 R: Reset corresponding property of current glass element\n"
@@ -4396,9 +4607,22 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 #endif
 			break;
 		case 'K':
-			if(blur_kernels)
+			if(keyboard[VK_CONTROL])//select image to blur
+			{
+				if(blur_kernels)
+				{
+					if(image.data)
+						free(image.data);
+					if(open_image(&image))
+						blur_image();
+				}
+			}
+			else if(blur_kernels)//disable live blur preview
+			{
+				array_free(&blurred_image);
 				array_free(&blur_kernels);
-			else if(yintersections)
+			}
+			else if(yintersections)//enable live blur preview
 			{
 				ARRAY_ALLOC(BlurKernel, blur_kernels, 0, photons->count, 0, free_blurkernel);
 				for(int k=0;k<(int)photons->count;++k)
