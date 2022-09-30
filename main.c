@@ -4505,6 +4505,7 @@ long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, lon
 				"C:\tToggle clear screen\n"
 				"\n"
 				"Ctrl O:\t\tOpen a preset\n"
+				"Ctrl S:\t\tSave preset\n"
 				"Tab / Shift Tab:\tSelect glass element\n"
 				"Space:\t\tToggle glass element\n"
 				"F:\t\tFlip glass element\n"
