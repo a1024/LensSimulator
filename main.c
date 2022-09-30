@@ -1129,7 +1129,7 @@ void			blur_image()
 					if(kx2>=0&&kx2<image.h)
 					{
 						unsigned char *pc=(unsigned char*)(image.data+image.w*ky2+kx2);
-						A[bkw*ky+kx].r=pc[kc];
+						A[bkw*ky+kx].r=pc[2-kc];//swap red & blue
 					}
 				}
 			}
