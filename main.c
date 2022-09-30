@@ -1135,7 +1135,7 @@ void			blur_image()
 			}
 		}
 
-		double gain=1/(size*sqrt(kernel->energy));//pre-divide by the size of the DFT, also a fake 'sqrt' energy boost
+		double gain=1/(size*kernel->energy);//pre-divide by the size of the DFT,	OPTIONAL: fake 'sqrt' energy boost
 		for(int ky=0;ky<bkh;++ky)
 		{
 			int ky2=ky+(bkh>>1);//kernel center should be at corners
