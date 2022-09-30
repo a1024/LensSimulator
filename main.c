@@ -1108,9 +1108,10 @@ void			blur_image()
 
 	A=(Comp*)malloc(size*sizeof(Comp));
 	B=(Comp*)malloc(size*sizeof(Comp));
-	for(int kc=0;kc<3&&kc<blur_kernels->count;++kc)
+	for(int kc=0;kc<3;++kc)
 	{
-		BlurKernel *kernel=(BlurKernel*)array_at(&blur_kernels, kc&-(blur_kernels->count>=3));//FIXME reusing first kernel/photon if less than 3
+		int kk=kc&-(blur_kernels->count>=3);//FIXME reusing first kernel/photon if less than 3
+		BlurKernel *kernel=(BlurKernel*)array_at(&blur_kernels, kk);
 
 		memset(A, 0, size*sizeof(Comp));
 		memset(B, 0, size*sizeof(Comp));
