@@ -93,7 +93,7 @@ void			console_start()//https://stackoverflow.com/questions/191842/how-do-i-get-
 	{
 		consoleactive=1;
 		int hConHandle;
-		ptrdiff_t lStdHandle;
+		long lStdHandle;
 		CONSOLE_SCREEN_BUFFER_INFO coninfo;
 		FILE *fp;
 
@@ -106,21 +106,21 @@ void			console_start()//https://stackoverflow.com/questions/191842/how-do-i-get-
 		SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), coninfo.dwSize);
 
 		// redirect unbuffered STDOUT to the console
-		lStdHandle=(ptrdiff_t)GetStdHandle(STD_OUTPUT_HANDLE);
+		lStdHandle=(long)GetStdHandle(STD_OUTPUT_HANDLE);
 		hConHandle=_open_osfhandle(lStdHandle, _O_TEXT);
 		fp=_fdopen(hConHandle, "w");
 		*stdout=*fp;
 		setvbuf(stdout, 0, _IONBF, 0);
 
 		// redirect unbuffered STDIN to the console
-		lStdHandle=(ptrdiff_t)GetStdHandle(STD_INPUT_HANDLE);
+		lStdHandle=(long)GetStdHandle(STD_INPUT_HANDLE);
 		hConHandle=_open_osfhandle(lStdHandle, _O_TEXT);
 		fp=_fdopen(hConHandle, "r");
 		*stdin=*fp;
 		setvbuf(stdin, 0, _IONBF, 0);
 
 		// redirect unbuffered STDERR to the console
-		lStdHandle=(ptrdiff_t)GetStdHandle(STD_ERROR_HANDLE);
+		lStdHandle=(long)GetStdHandle(STD_ERROR_HANDLE);
 		hConHandle=_open_osfhandle(lStdHandle, _O_TEXT);
 		fp=_fdopen(hConHandle, "w");
 		*stderr=*fp;
@@ -152,7 +152,7 @@ int				mod(int x, int n)
 }
 void			memfill(void *dst, const void *src, size_t dstbytes, size_t srcbytes)
 {
-	size_t copied;
+	unsigned copied;
 	char *d=(char*)dst;
 	const char *s=(const char*)src;
 	if(dstbytes<srcbytes)
@@ -772,7 +772,7 @@ void			render_blur_kernel(BlurKernel *kernel, int bw, int bh, Point const *hitpo
 	{
 		Point const *p1=hitpoints+kp, *p2=hitpoints+count-1-kp;
 		double ya=p1->y, yc=p2->y;
-		if(ya==ya&&fabs(ya)!=INFINITY&&yc==yc&&fabs(yc)!=INFINITY)
+		if(ya==ya&&fabs(ya)!=HUGE_VALD&&yc==yc&&fabs(yc)!=HUGE_VALD)
 		{
 			if(ya<ycenter&&ycenter<yc||yc<ycenter&&ycenter<ya)
 			{
@@ -843,7 +843,7 @@ void			render_kernels()
 {
 	if(blur_kernels&&blur_kernels->count==photons->count)
 	{
-		int nraysperphoton=(int)(yintersections->count/photons->count);
+		int nraysperphoton=yintersections->count/photons->count;
 		Point const *hitpoints=(Point*)yintersections->data;
 		for(int kp=0;kp<(int)photons->count;++kp)
 		{
@@ -1045,7 +1045,7 @@ void			apply_FFT_1D(Comp *data, int lg_count, int stride, int **BRP, Comp *temp,
 	{
 		int m=1<<it, m_2=m>>1;
 		double angle=cycle/m;
-		Comp wm={(float)cos(angle), (float)sin(angle)};
+		Comp wm={cosf(angle), sinf(angle)};
 		for(int kb=0;kb<count;kb+=m)
 		{
 			Comp w={1, 0};
@@ -1144,7 +1144,7 @@ void			blur_image()
 			{
 				int kx2=kx+(bkw>>1);
 				kx2-=bkw&-(kx2>=bkw);
-				B[bkw*ky+kx].r=(float)(kernel->data[bkw*ky2+kx2]*gain);
+				B[bkw*ky+kx].r=kernel->data[bkw*ky2+kx2]*gain;
 			}
 		}
 
@@ -2875,7 +2875,7 @@ void	meanvar(double *arr, int count, int stride, double *ret_mean, double *ret_v
 		count*=stride;
 		for(int k=0;k<count;k+=stride)
 		{
-			if(arr[k]==arr[k]&&fabs(arr[k])!=INFINITY)
+			if(arr[k]==arr[k]&&fabs(arr[k])!=HUGE_VALD)
 			{
 				mean+=arr[k];
 				++nvals;
@@ -2885,7 +2885,7 @@ void	meanvar(double *arr, int count, int stride, double *ret_mean, double *ret_v
 		var=0;
 		for(int k=0;k<count;k+=stride)
 		{
-			if(arr[k]==arr[k]&&fabs(arr[k])!=INFINITY)
+			if(arr[k]==arr[k]&&fabs(arr[k])!=HUGE_VALD)
 			{
 				double val=arr[k]-mean;
 				var+=val*val;
@@ -3160,7 +3160,7 @@ void	simulate(int user)//number of rays must be even, always double-sided,		user
 			double dx;
 			int kp3;
 
-			kp3=(kp2<<1)-((int)ph->paths->count-1);//reverse the memento pattern
+			kp3=(kp2<<1)-(ph->paths->count-1);//reverse the memento pattern
 			kp3^=-(kp3<0);
 			//if(kp3<0)
 			//	kp3=-1-kp3;
@@ -3551,11 +3551,11 @@ void			render()
 			Photon *lp=(Photon*)array_at(&photons, kn);
 			HPEN hPenRay=CreatePen(PS_SOLID, 1, lp->color);
 			hPenRay=(HPEN)SelectObject(ghMemDC, hPenRay);
-			for(int kp=0, npaths=(int)(lp->paths->count);kp<npaths;++kp)
+			for(int kp=0, npaths=lp->paths->count;kp<npaths;++kp)
 			{
 				Path *p=(Path*)array_at(&lp->paths, kp);
 				Point *points=(Point*)array_at(&p->points, 0);
-				int npoints=(int)p->points->count;
+				int npoints=p->points->count;
 				draw_curve(points, npoints, scale);
 			}
 			hPenRay=(HPEN)SelectObject(ghMemDC, hPenRay);
@@ -3650,7 +3650,7 @@ void			render()
 			//	ys=scale->Yr;
 
 			p1=(Point*)array_at(&yintersections, 0);
-			if(p1->y==p1->y&&fabs(p1->y)!=INFINITY)
+			if(p1->y==p1->y&&fabs(p1->y)!=HUGE_VALD)
 				x1=w/(yintersections->count+1), y1=(h>>1)+(int)((p1->y-y_focus)*ys);
 			else
 				x1=0x80000000, y1=0x80000000;
@@ -3658,7 +3658,7 @@ void			render()
 			for(int k=1;k<(int)yintersections->count;++k)
 			{
 				p1=(Point*)array_at(&yintersections, k);
-				if(p1->y==p1->y&&fabs(p1->y)!=INFINITY)
+				if(p1->y==p1->y&&fabs(p1->y)!=HUGE_VALD)
 					x2=w*(k+1)/(yintersections->count+1), y2=(h>>1)+(int)((p1->y-y_focus)*ys);
 				else
 					x2=0x80000000, y2=0x80000000;
@@ -3681,7 +3681,7 @@ void			render()
 			for(int k=0;k<(int)yintersections->count;++k)
 			{
 				Point *p1=(Point*)array_at(&yintersections, k);
-				if(p1->y==p1->y&&fabs(p1->y)!=INFINITY)
+				if(p1->y==p1->y&&fabs(p1->y)!=HUGE_VALD)
 				{
 					int x1=w*(k+1)/(yintersections->count+1),
 						y2=y1+(int)(p1->y*scale->Yr);
@@ -4222,7 +4222,7 @@ void			set_attribute(int attrNo)//attrNo: attrNo>>1 is kx, LSB is ky: {`/0: pos/
 #endif
 	simulate(1);
 }
-LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+long __stdcall	WndProc(HWND hWnd, unsigned int message, unsigned int wParam, long lParam)
 {
 	switch(message)
 	{
@@ -4273,7 +4273,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		render();
 		break;
 	case WM_TIMER:
-		if(elements->count)
 		{
 			OpticComp *oe=(OpticComp*)array_at(&elements, current_elem);
 			double dx=DX/w, delta;//horizontal pixel size in real units: the more you zoom in, the finer is the change
@@ -4389,9 +4388,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			if(e)
 				simulate(1);
 			InvalidateRect(ghWnd, 0, 0);
+			if(!kpressed)
+				timer=0, KillTimer(ghWnd, 0);
 		}
-		if(!kpressed)
-			timer=0, KillTimer(ghWnd, 0);
 		break;
 
 	case WM_MOUSEMOVE:
@@ -4811,7 +4810,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	}
 	return DefWindowProcA(hWnd, message, wParam, lParam);
 }
-int __stdcall WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
+int __stdcall	WinMain(HINSTANCE hInstance, HINSTANCE hPrev, char *cmdargs, int nCmdShow)
 {
 	WNDCLASSEXA wndClassEx=
 	{
@@ -4847,7 +4846,7 @@ int __stdcall WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdL
 		ebackup=array_copy(&elements);
 		simulate(1);
 
-	ShowWindow(ghWnd, nShowCmd);
+	ShowWindow(ghWnd, nCmdShow);
 	
 		QueryPerformanceFrequency(&li);freq=li.QuadPart;
 		QueryPerformanceCounter(&li), srand(li.LowPart);
@@ -4863,5 +4862,5 @@ int __stdcall WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdL
 	
 		DeleteObject(SelectObject(ghMemDC, hBitmap)), DeleteDC(ghMemDC);
 
-	return (int)msg.wParam;
+	return msg.wParam;
 }
